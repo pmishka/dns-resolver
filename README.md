@@ -1,4 +1,4 @@
-# DNS Resolver + MikroTik Routes
+# [DNS Resolver + MikroTik Routes](https://github.com/pmishka/dns-resolver)
 
 Веб-приложение на Flask для домашней инфраструктуры:
 - резолвит A-записи доменов через выбранный DNS-провайдер (по умолчанию Google DNS)
