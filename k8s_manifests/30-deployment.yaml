@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: dns-resolver
-          image: mikhailpyrochkin/dns-resolver:latest
+          image: mikhailpyrochkin/dns-resolver:1.0.1
           imagePullPolicy: Always
           ports:
             - name: http

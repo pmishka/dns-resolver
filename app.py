@@ -65,11 +65,15 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def parse_gateways(raw_value: str, fallback_gateway: str) -> tuple[list[str], str, dict[str, str]]:
+def parse_gateways(
+    raw_value: str, fallback_gateway: str
+) -> tuple[list[str], str, dict[str, str], dict[str, str]]:
     gateways: list[str] = []
     seen: set[str] = set()
     default_gateway = ""
     labels: dict[str, str] = {}
+    distances: dict[str, str] = {}
+    default_markers = {"default", "*", "true", "1", "yes"}
 
     for raw in raw_value.split(","):
         token = raw.strip()
@@ -80,26 +84,21 @@ def parse_gateways(raw_value: str, fallback_gateway: str) -> tuple[list[str], st
             continue
 
         if "|" in token:
-            parts = token.split("|")
+            parts = [part.strip() for part in token.split("|")]
             token = parts[0].strip()
 
-            default_marker = parts[1].strip().lower() if len(parts) > 1 else ""
-            if default_marker in ("default", "*", "true", "1", "yes"):
+            distance_raw = parts[1] if len(parts) > 1 else ""
+            if distance_raw:
+                try:
+                    distances[token] = str(int(distance_raw))
+                except ValueError:
+                    pass
+
+            default_marker = (parts[2] if len(parts) > 2 else "").strip().lower()
+            if default_marker in default_markers:
                 is_default = True
 
-            if len(parts) > 2:
-                label = parts[2].strip()
-
-        lower = token.lower()
-        if token.endswith("*"):
-            token = token[:-1].strip()
-            is_default = True
-        elif lower.endswith(":default"):
-            token = token[: -len(":default")].strip()
-            is_default = True
-        elif lower.startswith("default="):
-            token = token[len("default=") :].strip()
-            is_default = True
+            label = (parts[3] if len(parts) > 3 else "").strip()
 
         gateway = token
         if not gateway or gateway in seen:
@@ -113,18 +112,30 @@ def parse_gateways(raw_value: str, fallback_gateway: str) -> tuple[list[str], st
     if not gateways:
         gateways = [fallback_gateway]
         labels[fallback_gateway] = fallback_gateway
+        distances[fallback_gateway] = DEFAULT_DISTANCE
 
     if not default_gateway:
         default_gateway = gateways[0]
 
-    return gateways, default_gateway, labels
+    return gateways, default_gateway, labels, distances
 
 
-AVAILABLE_GATEWAYS, UI_DEFAULT_GATEWAY, GATEWAY_LABELS = parse_gateways(GATEWAYS_RAW, DEFAULT_GATEWAY)
+AVAILABLE_GATEWAYS, UI_DEFAULT_GATEWAY, GATEWAY_LABELS, GATEWAY_DEFAULT_DISTANCES = parse_gateways(
+    GATEWAYS_RAW, DEFAULT_GATEWAY
+)
 GATEWAY_OPTIONS = [
-    {"value": gateway, "label": GATEWAY_LABELS.get(gateway, gateway)}
+    {
+        "value": gateway,
+        "label": GATEWAY_LABELS.get(gateway, gateway),
+        "default_distance": GATEWAY_DEFAULT_DISTANCES.get(gateway, ""),
+    }
     for gateway in AVAILABLE_GATEWAYS
 ]
+
+
+def get_default_distance_for_gateway(gateway: str) -> str:
+    value = str(GATEWAY_DEFAULT_DISTANCES.get(gateway, "")).strip()
+    return value or DEFAULT_DISTANCE
 
 
 def parse_dns_providers(raw_value: str) -> tuple[list[dict[str, str]], str]:
@@ -775,7 +786,7 @@ def base_context() -> dict[str, Any]:
         "gateway_options": GATEWAY_OPTIONS,
         "dns_provider": UI_DEFAULT_DNS_PROVIDER,
         "dns_provider_options": DNS_PROVIDERS,
-        "distance": DEFAULT_DISTANCE,
+        "distance": get_default_distance_for_gateway(UI_DEFAULT_GATEWAY),
         "comment_prefix": DEFAULT_COMMENT_PREFIX,
         "domains_text": "",
         "ips": [],
@@ -818,7 +829,8 @@ def redirect_with_index_context(context: dict[str, Any]):
 def hydrate_resolve_context_from_form(context: dict[str, Any], form: Any) -> dict[str, Any]:
     context["gateway"] = form.get("gateway", UI_DEFAULT_GATEWAY).strip()
     context["dns_provider"] = form.get("dns_provider", UI_DEFAULT_DNS_PROVIDER).strip().lower()
-    context["distance"] = form.get("distance", DEFAULT_DISTANCE).strip()
+    distance_from_form = form.get("distance", "").strip()
+    context["distance"] = distance_from_form or get_default_distance_for_gateway(context["gateway"])
     context["comment_prefix"] = form.get("comment_prefix", DEFAULT_COMMENT_PREFIX).strip()
     context["domains_text"] = form.get("domains", "").strip()
     return context
@@ -1139,7 +1151,8 @@ def prepare_add_routes_context(form: Any) -> tuple[dict[str, Any], list[str] | N
     context = base_context()
     context["gateway"] = form.get("gateway", UI_DEFAULT_GATEWAY).strip()
     context["dns_provider"] = form.get("dns_provider", UI_DEFAULT_DNS_PROVIDER).strip().lower()
-    context["distance"] = form.get("distance", DEFAULT_DISTANCE).strip()
+    distance_from_form = form.get("distance", "").strip()
+    context["distance"] = distance_from_form or get_default_distance_for_gateway(context["gateway"])
     context["comment_prefix"] = form.get("comment_prefix", DEFAULT_COMMENT_PREFIX).strip()
     resolve_id = form.get("resolve_id", "").strip()
 

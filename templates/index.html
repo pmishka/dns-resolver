@@ -17,7 +17,11 @@
           <label for="gateway">Gateway</label>
           <select id="gateway" name="gateway" required>
             {% for option in gateway_options %}
-              <option value="{{ option.value }}" {% if option.value == gateway %}selected{% endif %}>{{ option.label }}</option>
+              <option
+                value="{{ option.value }}"
+                data-default-distance="{{ option.default_distance }}"
+                {% if option.value == gateway %}selected{% endif %}
+              >{{ option.label }}</option>
             {% endfor %}
           </select>
         </div>
@@ -97,7 +101,7 @@
         <form id="add-routes-form" method="post" action="/add-routes" class="actions">
           <input type="hidden" name="gateway" value="{{ gateway }}" />
           <input type="hidden" name="dns_provider" value="{{ dns_provider }}" />
-          <input type="hidden" name="distance" value="{{ distance }}" />
+          <input id="add-routes-distance" type="hidden" name="distance" value="{{ distance }}" />
           <input id="add-routes-comment-prefix" type="hidden" name="comment_prefix" value="{{ comment_prefix }}" />
           <input type="hidden" name="domains" value="{{ domains_text }}" />
           <input type="hidden" name="resolve_id" value="{{ resolve_id }}" />
@@ -201,6 +205,9 @@
       const addRoutesSubmitButton = addRoutesForm ? addRoutesForm.querySelector('button[type="submit"]') : null;
       const commentPrefixInput = document.getElementById("comment_prefix");
       const addRoutesCommentPrefixInput = document.getElementById("add-routes-comment-prefix");
+      const gatewayInput = document.getElementById("gateway");
+      const distanceInput = document.getElementById("distance");
+      const addRoutesDistanceInput = document.getElementById("add-routes-distance");
 
       let pollTimer = null;
       let addPollTimer = null;
@@ -260,6 +267,17 @@
         });
         if (addRoutesCommentPrefixInput) {
           addRoutesCommentPrefixInput.value = prefix;
+        }
+      };
+
+      const applyGatewayDefaultDistance = () => {
+        if (!gatewayInput || !distanceInput) return;
+        const selected = gatewayInput.options[gatewayInput.selectedIndex];
+        const gatewayDistance = (selected && selected.dataset ? selected.dataset.defaultDistance || "" : "").trim();
+        if (!gatewayDistance) return;
+        distanceInput.value = gatewayDistance;
+        if (addRoutesDistanceInput) {
+          addRoutesDistanceInput.value = gatewayDistance;
         }
       };
 
@@ -391,6 +409,14 @@
 
       if (commentPrefixInput) {
         commentPrefixInput.addEventListener("input", applyCommentPrefixToResolvedTable);
+      }
+      if (gatewayInput) {
+        gatewayInput.addEventListener("change", applyGatewayDefaultDistance);
+      }
+      if (distanceInput && addRoutesDistanceInput) {
+        distanceInput.addEventListener("input", () => {
+          addRoutesDistanceInput.value = distanceInput.value;
+        });
       }
       applyCommentPrefixToResolvedTable();
     })();

@@ -6,7 +6,7 @@ metadata:
 data:
   APP_PORT: "5000"
   GUNICORN_TIMEOUT: "180"
-  GATEWAYS: "192.168.222.201|default|Отправить в VPN,Infolink-eth4||Убрать из VPN"
+  GATEWAYS: "192.168.222.201|20|default|Отправить в VPN,Infolink-eth4|2||Убрать из VPN"
   DEFAULT_GATEWAY: "192.168.222.201"
   DNS_PROVIDERS: "google|Google DNS|https://dns.google/resolve,cloudflare|Cloudflare DNS|https://cloudflare-dns.com/dns-query,yandex|Yandex DNS|ns://77.88.8.8,system|System DNS|system"
   DEFAULT_DNS_PROVIDER: "google"
