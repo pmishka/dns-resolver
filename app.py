@@ -48,9 +48,15 @@ INDEX_CONTEXT_SESSION_KEY = "index_context"
 INDEX_CONTEXT_CACHE_DIR = Path(os.getenv("INDEX_CONTEXT_CACHE_DIR", "/tmp/dns_resolver_index_context"))
 INDEX_CONTEXT_TTL_SECONDS = int(os.getenv("INDEX_CONTEXT_TTL_SECONDS", "900"))
 RESOLVE_JOB_TTL_SECONDS = int(os.getenv("RESOLVE_JOB_TTL_SECONDS", "3600"))
+ADD_ROUTE_JOB_TTL_SECONDS = int(os.getenv("ADD_ROUTE_JOB_TTL_SECONDS", "3600"))
+ROLLBACK_JOB_TTL_SECONDS = int(os.getenv("ROLLBACK_JOB_TTL_SECONDS", "3600"))
 
 RESOLVE_JOBS_LOCK = threading.Lock()
 RESOLVE_JOBS: dict[str, dict[str, Any]] = {}
+ADD_ROUTE_JOBS_LOCK = threading.Lock()
+ADD_ROUTE_JOBS: dict[str, dict[str, Any]] = {}
+ROLLBACK_JOBS_LOCK = threading.Lock()
+ROLLBACK_JOBS: dict[str, dict[str, Any]] = {}
 AUDIT_DB_INIT_LOCK = threading.Lock()
 AUDIT_DB_READY = False
 
@@ -553,13 +559,33 @@ def get_audit_db_connection() -> sqlite3.Connection:
     return conn
 
 
-def read_audit_entries(limit: int = AUDIT_LOG_MAX_ENTRIES) -> list[dict[str, Any]]:
+def read_audit_entries(limit: int = AUDIT_LOG_MAX_ENTRIES, offset: int = 0) -> list[dict[str, Any]]:
     conn = get_audit_db_connection()
     try:
-        rows = conn.execute(
-            "SELECT payload_json FROM audit_entries ORDER BY created_at DESC LIMIT ?",
-            (max(1, int(limit)),),
-        ).fetchall()
+        safe_offset = max(0, int(offset))
+        safe_limit = int(limit)
+        if safe_limit <= 0:
+            rows = conn.execute(
+                """
+                SELECT payload_json
+                FROM audit_entries
+                ORDER BY
+                    CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+                    created_at DESC
+                """,
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT payload_json
+                FROM audit_entries
+                ORDER BY
+                    CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+                    created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (max(1, safe_limit), safe_offset),
+            ).fetchall()
     finally:
         conn.close()
 
@@ -570,6 +596,26 @@ def read_audit_entries(limit: int = AUDIT_LOG_MAX_ENTRIES) -> list[dict[str, Any
         except Exception:
             continue
     return entries
+
+
+def count_audit_entries() -> int:
+    conn = get_audit_db_connection()
+    try:
+        row = conn.execute("SELECT COUNT(1) AS cnt FROM audit_entries").fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return 0
+    return int(row["cnt"])
+
+
+def clear_audit_entries() -> None:
+    conn = get_audit_db_connection()
+    try:
+        conn.execute("DELETE FROM audit_entries")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def append_audit_entry(entry: dict[str, Any]) -> None:
@@ -945,12 +991,53 @@ def index():
 
 @app.route("/logs", methods=["GET"])
 def logs():
+    per_page_raw = request.args.get("per_page", "10").strip().lower()
+    page_raw = request.args.get("page", "1").strip()
+
+    allowed_per_page = {"10", "20", "50", "100", "all"}
+    if per_page_raw not in allowed_per_page:
+        per_page_raw = "10"
+
+    try:
+        page = int(page_raw)
+    except ValueError:
+        page = 1
+    page = max(1, page)
+
+    total_entries = count_audit_entries()
+    if per_page_raw == "all":
+        per_page = 0
+        total_pages = 1
+        page = 1
+        offset = 0
+    else:
+        per_page = int(per_page_raw)
+        total_pages = max(1, (total_entries + per_page - 1) // per_page)
+        if page > total_pages:
+            page = total_pages
+        offset = (page - 1) * per_page
+
     return render_template(
         "logs.html",
-        audit_entries=read_audit_entries(500),
+        audit_entries=read_audit_entries(limit=per_page, offset=offset),
+        total_entries=total_entries,
+        per_page=per_page_raw,
+        page=page,
+        total_pages=total_pages,
+        has_prev=page > 1,
+        has_next=page < total_pages,
         message=request.args.get("message"),
         error=request.args.get("error"),
     )
+
+
+@app.route("/logs-clear", methods=["POST"])
+def logs_clear():
+    try:
+        clear_audit_entries()
+    except Exception as exc:
+        return redirect(url_for("logs", error=f"Не удалось очистить логи: {exc}"))
+    return redirect(url_for("logs", message="Логи очищены."))
 
 
 @app.route("/resolve", methods=["POST"])
@@ -1036,23 +1123,34 @@ def resolve_finish(job_id: str):
     return redirect_with_index_context(context)
 
 
-@app.route("/add-routes", methods=["POST"])
-def add_routes():
+def cleanup_add_route_jobs() -> None:
+    now_ts = datetime.now(timezone.utc).timestamp()
+    with ADD_ROUTE_JOBS_LOCK:
+        expired_ids = [
+            job_id
+            for job_id, job in ADD_ROUTE_JOBS.items()
+            if now_ts - float(job.get("updated_at_ts", 0)) > ADD_ROUTE_JOB_TTL_SECONDS
+        ]
+        for job_id in expired_ids:
+            ADD_ROUTE_JOBS.pop(job_id, None)
+
+
+def prepare_add_routes_context(form: Any) -> tuple[dict[str, Any], list[str] | None, dict[str, str], int | None]:
     context = base_context()
-    context["gateway"] = request.form.get("gateway", UI_DEFAULT_GATEWAY).strip()
-    context["dns_provider"] = request.form.get("dns_provider", UI_DEFAULT_DNS_PROVIDER).strip().lower()
-    context["distance"] = request.form.get("distance", DEFAULT_DISTANCE).strip()
-    context["comment_prefix"] = request.form.get("comment_prefix", DEFAULT_COMMENT_PREFIX).strip()
-    resolve_id = request.form.get("resolve_id", "").strip()
+    context["gateway"] = form.get("gateway", UI_DEFAULT_GATEWAY).strip()
+    context["dns_provider"] = form.get("dns_provider", UI_DEFAULT_DNS_PROVIDER).strip().lower()
+    context["distance"] = form.get("distance", DEFAULT_DISTANCE).strip()
+    context["comment_prefix"] = form.get("comment_prefix", DEFAULT_COMMENT_PREFIX).strip()
+    resolve_id = form.get("resolve_id", "").strip()
 
     if not resolve_id:
         context["error"] = "Истекла сессия резолва. Выполните поиск IP заново."
-        return redirect_with_index_context(context)
+        return context, None, {}, None
 
     payload = load_resolve_payload(resolve_id)
     if payload is None:
         context["error"] = "Данные резолва не найдены или устарели. Выполните поиск IP заново."
-        return redirect_with_index_context(context)
+        return context, None, {}, None
 
     ips = [str(ip).strip() for ip in payload.get("ips", []) if str(ip).strip()]
     ip_domain_map = {
@@ -1074,98 +1172,348 @@ def add_routes():
 
     if not ips:
         context["error"] = "В выбранной сессии нет IP-адресов. Выполните поиск заново."
-        return redirect_with_index_context(context)
+        return context, None, {}, None
 
     try:
         distance = int(context["distance"])
     except ValueError:
         context["error"] = "Distance должен быть числом."
-        return redirect_with_index_context(context)
+        return context, None, {}, None
 
     if context["gateway"] not in AVAILABLE_GATEWAYS:
         context["error"] = "Gateway должен быть выбран из списка."
-        return redirect_with_index_context(context)
+        return context, None, {}, None
     if context["dns_provider"] not in DNS_PROVIDER_ENDPOINTS:
         context["error"] = "DNS provider должен быть выбран из списка."
-        return redirect_with_index_context(context)
+        return context, None, {}, None
 
+    return context, ips, ip_domain_map, distance
+
+
+def execute_add_routes(
+    context: dict[str, Any],
+    ips: list[str],
+    ip_domain_map: dict[str, str],
+    distance: int,
+    progress_hook: Any = None,
+) -> dict[str, Any]:
     domains = parse_domains(context["domains_text"])
     fallback_comment = domains[0] if domains else "dns-resolver"
-
     client = MikroTikClient()
-    source = get_request_source()
+    source = context.get("_request_source") or {}
+
+    existing_routes = client.get_routes(gateway=context["gateway"], distance=distance)
+    added: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
+
+    total_ips = len(ips)
+    for idx, ip in enumerate(ips, start=1):
+        if callable(progress_hook):
+            progress_hook(idx, total_ips, ip)
+
+        covering_route = find_covering_route(ip, existing_routes, distance)
+        if covering_route:
+            skipped.append(
+                {
+                    "ip": ip,
+                    "dst_address": str(covering_route.get("dst-address", "")).strip(),
+                    "gateway": str(covering_route.get("gateway", "")).strip(),
+                    "distance": str(covering_route.get("distance", "")).strip(),
+                    "comment": str(covering_route.get("comment", "")).strip(),
+                }
+            )
+            continue
+
+        comment = ip_domain_map.get(ip, fallback_comment)
+        final_comment = build_route_comment(context["comment_prefix"], comment)
+        dst_address = f"{ip}/32"
+        client.add_route(
+            dst_address=dst_address,
+            gateway=context["gateway"],
+            distance=distance,
+            comment=final_comment,
+        )
+
+        exact_routes = client.find_exact_routes(
+            dst_address=dst_address,
+            gateway=context["gateway"],
+            distance=distance,
+            comment=final_comment,
+        )
+        route_id = None
+        if exact_routes:
+            route_id = MikroTikClient.extract_route_id(exact_routes[0])
+
+        audit_entry = {
+            "id": uuid.uuid4().hex,
+            "created_at": utc_now_iso(),
+            "action": "add_route",
+            "status": "active",
+            "source": source,
+            "route": {
+                "route_id": route_id,
+                "dst_address": dst_address,
+                "gateway": context["gateway"],
+                "distance": distance,
+                "comment": final_comment,
+            },
+        }
+        append_audit_entry(audit_entry)
+
+        added.append({"ip": ip, "comment": final_comment})
+        existing_routes.append({"dst-address": dst_address, "distance": str(distance)})
+
+    context["result"] = {"added": added, "skipped": skipped}
+    context["audit_entries"] = read_audit_entries()
+    return context
+
+
+def run_add_route_job(job_id: str, ips: list[str], ip_domain_map: dict[str, str], distance: int) -> None:
+    def progress_hook(current: int, total: int, item: str) -> None:
+        with ADD_ROUTE_JOBS_LOCK:
+            job = ADD_ROUTE_JOBS.get(job_id)
+            if not job:
+                return
+            job["progress_current"] = current
+            job["progress_total"] = total
+            job["current_item"] = item
+            job["updated_at_ts"] = datetime.now(timezone.utc).timestamp()
+
+    with ADD_ROUTE_JOBS_LOCK:
+        job = ADD_ROUTE_JOBS.get(job_id)
+        if not job:
+            return
+        context = dict(job.get("context", {}))
 
     try:
-        existing_routes = client.get_routes(gateway=context["gateway"], distance=distance)
-
-        added: list[dict[str, str]] = []
-        skipped: list[dict[str, str]] = []
-
-        for ip in ips:
-            covering_route = find_covering_route(ip, existing_routes, distance)
-            if covering_route:
-                skipped.append(
-                    {
-                        "ip": ip,
-                        "dst_address": str(covering_route.get("dst-address", "")).strip(),
-                        "gateway": str(covering_route.get("gateway", "")).strip(),
-                        "distance": str(covering_route.get("distance", "")).strip(),
-                        "comment": str(covering_route.get("comment", "")).strip(),
-                    }
-                )
-                continue
-
-            comment = ip_domain_map.get(ip, fallback_comment)
-            final_comment = build_route_comment(context["comment_prefix"], comment)
-            dst_address = f"{ip}/32"
-            client.add_route(
-                dst_address=dst_address,
-                gateway=context["gateway"],
-                distance=distance,
-                comment=final_comment,
-            )
-
-            exact_routes = client.find_exact_routes(
-                dst_address=dst_address,
-                gateway=context["gateway"],
-                distance=distance,
-                comment=final_comment,
-            )
-            route_id = None
-            if exact_routes:
-                route_id = MikroTikClient.extract_route_id(exact_routes[0])
-
-            audit_entry = {
-                "id": uuid.uuid4().hex,
-                "created_at": utc_now_iso(),
-                "action": "add_route",
-                "status": "active",
-                "source": source,
-                "route": {
-                    "route_id": route_id,
-                    "dst_address": dst_address,
-                    "gateway": context["gateway"],
-                    "distance": distance,
-                    "comment": final_comment,
-                },
-            }
-            append_audit_entry(audit_entry)
-
-            added.append({"ip": ip, "comment": final_comment})
-            existing_routes.append({"dst-address": dst_address, "distance": str(distance)})
-
+        final_context = execute_add_routes(context, ips, ip_domain_map, distance, progress_hook=progress_hook)
+        with ADD_ROUTE_JOBS_LOCK:
+            job = ADD_ROUTE_JOBS.get(job_id)
+            if not job:
+                return
+            job["status"] = "done"
+            job["done"] = True
+            job["context"] = final_context
+            job["current_item"] = ""
+            job["progress_current"] = len(ips)
+            job["progress_total"] = len(ips)
+            job["updated_at_ts"] = datetime.now(timezone.utc).timestamp()
     except Exception as exc:
         context["error"] = f"Ошибка работы с MikroTik API: {exc}"
         context["audit_entries"] = read_audit_entries()
+        with ADD_ROUTE_JOBS_LOCK:
+            job = ADD_ROUTE_JOBS.get(job_id)
+            if not job:
+                return
+            job["status"] = "failed"
+            job["done"] = True
+            job["context"] = context
+            job["current_item"] = ""
+            job["progress_current"] = len(ips)
+            job["progress_total"] = len(ips)
+            job["updated_at_ts"] = datetime.now(timezone.utc).timestamp()
+
+
+@app.route("/add-routes", methods=["POST"])
+def add_routes():
+    context, ips, ip_domain_map, distance = prepare_add_routes_context(request.form)
+    if ips is None or distance is None:
         return redirect_with_index_context(context)
 
-    context["result"] = {
-        "added": added,
-        "skipped": skipped,
-    }
-    context["audit_entries"] = read_audit_entries()
+    context["_request_source"] = get_request_source()
+    try:
+        context = execute_add_routes(context, ips, ip_domain_map, distance)
+    except Exception as exc:
+        context["error"] = f"Ошибка работы с MikroTik API: {exc}"
+        context["audit_entries"] = read_audit_entries()
+    finally:
+        context.pop("_request_source", None)
+    return redirect_with_index_context(context)
+
+
+@app.route("/add-routes-start", methods=["POST"])
+def add_routes_start():
+    cleanup_add_route_jobs()
+    context, ips, ip_domain_map, distance = prepare_add_routes_context(request.form)
+    if ips is None or distance is None:
+        return jsonify({"ok": False, "error": context.get("error")}), 400
+
+    context["_request_source"] = get_request_source()
+    job_id = uuid.uuid4().hex
+    now_ts = datetime.now(timezone.utc).timestamp()
+    with ADD_ROUTE_JOBS_LOCK:
+        ADD_ROUTE_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "running",
+            "done": False,
+            "progress_current": 0,
+            "progress_total": len(ips),
+            "current_item": "",
+            "context": context,
+            "updated_at_ts": now_ts,
+        }
+
+    worker = threading.Thread(target=run_add_route_job, args=(job_id, ips, ip_domain_map, distance), daemon=True)
+    worker.start()
+    return jsonify({"ok": True, "job_id": job_id, "total": len(ips)})
+
+
+@app.route("/add-routes-progress/<job_id>", methods=["GET"])
+def add_routes_progress(job_id: str):
+    cleanup_add_route_jobs()
+    with ADD_ROUTE_JOBS_LOCK:
+        job = ADD_ROUTE_JOBS.get(job_id)
+        if not job:
+            return jsonify({"ok": False, "error": "Задача добавления не найдена или устарела."}), 404
+        return jsonify(
+            {
+                "ok": True,
+                "job_id": job_id,
+                "status": job.get("status", "running"),
+                "done": bool(job.get("done", False)),
+                "progress_current": int(job.get("progress_current", 0)),
+                "progress_total": int(job.get("progress_total", 0)),
+                "current_item": str(job.get("current_item", "")),
+            }
+        )
+
+
+@app.route("/add-routes-finish/<job_id>", methods=["GET"])
+def add_routes_finish(job_id: str):
+    cleanup_add_route_jobs()
+    with ADD_ROUTE_JOBS_LOCK:
+        job = ADD_ROUTE_JOBS.get(job_id)
+        if not job:
+            context = base_context()
+            context["error"] = "Задача добавления не найдена или устарела. Повторите добавление маршрутов."
+            return redirect_with_index_context(context)
+
+        if not bool(job.get("done", False)):
+            context = base_context()
+            context["error"] = "Добавление маршрутов еще выполняется. Дождитесь завершения."
+            return redirect_with_index_context(context)
+
+        context = dict(job.get("context", {}))
+        context.pop("_request_source", None)
+        ADD_ROUTE_JOBS.pop(job_id, None)
 
     return redirect_with_index_context(context)
+
+
+def rollback_one_entry(client: MikroTikClient, entry_id: str) -> tuple[bool, str]:
+    entry = find_audit_entry(entry_id)
+    if entry is None:
+        return False, "Запись аудита не найдена."
+
+    if entry.get("status") == "rolled_back":
+        return False, "Эта запись уже откатана ранее."
+
+    route = entry.get("route", {})
+    route_id = route.get("route_id")
+    dst_address = str(route.get("dst_address", "")).strip()
+    gateway = str(route.get("gateway", "")).strip()
+    comment = str(route.get("comment", "")).strip()
+    distance_raw = route.get("distance")
+
+    try:
+        distance = int(distance_raw)
+    except (TypeError, ValueError):
+        return False, "В записи аудита некорректный distance, откат невозможен."
+
+    try:
+        if route_id:
+            client.remove_route(str(route_id))
+        else:
+            candidates = client.find_exact_routes(
+                dst_address=dst_address,
+                gateway=gateway,
+                distance=distance,
+                comment=comment,
+            )
+            if not candidates:
+                return False, "Маршрут для отката не найден в MikroTik."
+
+            candidate_id = MikroTikClient.extract_route_id(candidates[0])
+            if not candidate_id:
+                return False, "Не удалось определить route id для отката."
+
+            client.remove_route(candidate_id)
+            route_id = candidate_id
+    except Exception as exc:
+        return False, f"Ошибка отката маршрута: {exc}"
+
+    updated = update_audit_entry(
+        entry_id,
+        {
+            "status": "rolled_back",
+            "rolled_back_at": utc_now_iso(),
+            "rolled_back_route_id": str(route_id) if route_id else None,
+        },
+    )
+    if not updated:
+        return False, "Маршрут откатили, но запись аудита не удалось обновить."
+    return True, "ok"
+
+
+def cleanup_rollback_jobs() -> None:
+    now_ts = datetime.now(timezone.utc).timestamp()
+    with ROLLBACK_JOBS_LOCK:
+        expired_ids = [
+            job_id
+            for job_id, job in ROLLBACK_JOBS.items()
+            if now_ts - float(job.get("updated_at_ts", 0)) > ROLLBACK_JOB_TTL_SECONDS
+        ]
+        for job_id in expired_ids:
+            ROLLBACK_JOBS.pop(job_id, None)
+
+
+def run_rollback_job(job_id: str, entry_ids: list[str]) -> None:
+    rolled_back_count = 0
+    failures: list[str] = []
+    client = MikroTikClient()
+    total = len(entry_ids)
+
+    for idx, entry_id in enumerate(entry_ids, start=1):
+        success, reason = rollback_one_entry(client, entry_id)
+        if success:
+            rolled_back_count += 1
+        else:
+            failures.append(f"{entry_id}: {reason}")
+
+        with ROLLBACK_JOBS_LOCK:
+            job = ROLLBACK_JOBS.get(job_id)
+            if not job:
+                return
+            job["progress_current"] = idx
+            job["progress_total"] = total
+            job["current_item"] = entry_id
+            job["rolled_back_count"] = rolled_back_count
+            job["failures"] = failures[:20]
+            job["updated_at_ts"] = datetime.now(timezone.utc).timestamp()
+
+    if rolled_back_count == 0 and failures:
+        message = ""
+        error = "Откат не выполнен.\n" + "\n".join(failures[:5])
+    elif failures:
+        message = f"Откат выполнен частично. Успешно: {rolled_back_count}, ошибок: {len(failures)}."
+        error = "\n".join(failures[:5])
+    else:
+        message = f"Откат выполнен успешно. Записей: {rolled_back_count}."
+        error = ""
+
+    with ROLLBACK_JOBS_LOCK:
+        job = ROLLBACK_JOBS.get(job_id)
+        if not job:
+            return
+        job["done"] = True
+        job["status"] = "done"
+        job["message"] = message
+        job["error"] = error
+        job["progress_current"] = total
+        job["progress_total"] = total
+        job["current_item"] = ""
+        job["rolled_back_count"] = rolled_back_count
+        job["updated_at_ts"] = datetime.now(timezone.utc).timestamp()
 
 
 @app.route("/rollback", methods=["POST"])
@@ -1194,67 +1542,12 @@ def rollback_route():
     if not unique_entry_ids:
         return fail("Не выбраны записи для отката.")
 
-    def rollback_one(client: MikroTikClient, entry_id: str) -> tuple[bool, str]:
-        entry = find_audit_entry(entry_id)
-        if entry is None:
-            return False, "Запись аудита не найдена."
-
-        if entry.get("status") == "rolled_back":
-            return False, "Эта запись уже откатана ранее."
-
-        route = entry.get("route", {})
-        route_id = route.get("route_id")
-        dst_address = str(route.get("dst_address", "")).strip()
-        gateway = str(route.get("gateway", "")).strip()
-        comment = str(route.get("comment", "")).strip()
-        distance_raw = route.get("distance")
-
-        try:
-            distance = int(distance_raw)
-        except (TypeError, ValueError):
-            return False, "В записи аудита некорректный distance, откат невозможен."
-
-        try:
-            if route_id:
-                client.remove_route(str(route_id))
-            else:
-                candidates = client.find_exact_routes(
-                    dst_address=dst_address,
-                    gateway=gateway,
-                    distance=distance,
-                    comment=comment,
-                )
-                if not candidates:
-                    return False, "Маршрут для отката не найден в MikroTik."
-
-                candidate_id = MikroTikClient.extract_route_id(candidates[0])
-                if not candidate_id:
-                    return False, "Не удалось определить route id для отката."
-
-                client.remove_route(candidate_id)
-                route_id = candidate_id
-        except Exception as exc:
-            return False, f"Ошибка отката маршрута: {exc}"
-
-        updated = update_audit_entry(
-            entry_id,
-            {
-                "status": "rolled_back",
-                "rolled_back_at": utc_now_iso(),
-                "rolled_back_route_id": str(route_id) if route_id else None,
-            },
-        )
-        if not updated:
-            return False, "Маршрут откатили, но запись аудита не удалось обновить."
-
-        return True, "ok"
-
     client = MikroTikClient()
     rolled_back_count = 0
     failures: list[str] = []
 
     for entry_id in unique_entry_ids:
-        success, reason = rollback_one(client, entry_id)
+        success, reason = rollback_one_entry(client, entry_id)
         if success:
             rolled_back_count += 1
         else:
@@ -1273,6 +1566,81 @@ def rollback_route():
         return redirect_with_index_context(context)
 
     return ok(f"Откат выполнен успешно. Записей: {rolled_back_count}.")
+
+
+@app.route("/rollback-start", methods=["POST"])
+def rollback_start():
+    cleanup_rollback_jobs()
+    entry_ids = [value.strip() for value in request.form.getlist("entry_ids") if value.strip()]
+    unique_entry_ids = list(dict.fromkeys(entry_ids))
+    if not unique_entry_ids:
+        return jsonify({"ok": False, "error": "Не выбраны записи для отката."}), 400
+
+    job_id = uuid.uuid4().hex
+    now_ts = datetime.now(timezone.utc).timestamp()
+    with ROLLBACK_JOBS_LOCK:
+        ROLLBACK_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "running",
+            "done": False,
+            "progress_current": 0,
+            "progress_total": len(unique_entry_ids),
+            "current_item": "",
+            "rolled_back_count": 0,
+            "failures": [],
+            "message": "",
+            "error": "",
+            "updated_at_ts": now_ts,
+        }
+
+    worker = threading.Thread(target=run_rollback_job, args=(job_id, unique_entry_ids), daemon=True)
+    worker.start()
+    return jsonify({"ok": True, "job_id": job_id, "total": len(unique_entry_ids)})
+
+
+@app.route("/rollback-progress/<job_id>", methods=["GET"])
+def rollback_progress(job_id: str):
+    cleanup_rollback_jobs()
+    with ROLLBACK_JOBS_LOCK:
+        job = ROLLBACK_JOBS.get(job_id)
+        if not job:
+            return jsonify({"ok": False, "error": "Задача отката не найдена или устарела."}), 404
+        return jsonify(
+            {
+                "ok": True,
+                "job_id": job_id,
+                "status": job.get("status", "running"),
+                "done": bool(job.get("done", False)),
+                "progress_current": int(job.get("progress_current", 0)),
+                "progress_total": int(job.get("progress_total", 0)),
+                "current_item": str(job.get("current_item", "")),
+                "rolled_back_count": int(job.get("rolled_back_count", 0)),
+            }
+        )
+
+
+@app.route("/rollback-finish/<job_id>", methods=["GET"])
+def rollback_finish(job_id: str):
+    cleanup_rollback_jobs()
+    with ROLLBACK_JOBS_LOCK:
+        job = ROLLBACK_JOBS.get(job_id)
+        if not job:
+            return redirect(url_for("logs", error="Задача отката не найдена или устарела."))
+
+        if not bool(job.get("done", False)):
+            return redirect(url_for("logs", error="Откат еще выполняется. Дождитесь завершения."))
+
+        message = str(job.get("message", "")).strip()
+        error = str(job.get("error", "")).strip()
+        ROLLBACK_JOBS.pop(job_id, None)
+
+    if message and error:
+        return redirect(url_for("logs", message=message, error=error))
+    if message:
+        return redirect(url_for("logs", message=message))
+    if error:
+        return redirect(url_for("logs", error=error))
+    return redirect(url_for("logs"))
 
 
 if __name__ == "__main__":

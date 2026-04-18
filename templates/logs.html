@@ -4,118 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DNS Resolver Audit Logs</title>
-  <style>
-    :root {
-      --card: #282a36;
-      --text: #f8f8f2;
-      --muted: #aab3d1;
-      --accent: #50fa7b;
-      --danger: #ff5555;
-      --border: #44475a;
-      --warn-bg: #3b3354;
-      --warn-border: #bd93f9;
-      --secondary: #6272a4;
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      font-family: "Segoe UI", Tahoma, sans-serif;
-      background: radial-gradient(circle at 20% 10%, #343746 0%, #282a36 45%, #1f212b 100%);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      align-items: flex-start;
-      justify-content: center;
-      padding: 20px;
-    }
-
-    .card {
-      width: 100%;
-      max-width: 1100px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
-      padding: 22px;
-    }
-
-    h1 {
-      margin: 0 0 8px;
-      font-size: 1.35rem;
-    }
-
-    .muted {
-      color: var(--muted);
-      font-size: 0.92rem;
-    }
-
-    .alert {
-      margin: 14px 0;
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid var(--warn-border);
-      background: var(--warn-bg);
-    }
-
-    .error {
-      border-color: var(--danger);
-      color: #ffd6d6;
-      background: #4a2a37;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 14px;
-      font-size: 0.9rem;
-    }
-
-    th,
-    td {
-      text-align: left;
-      border-bottom: 1px solid var(--border);
-      padding: 8px;
-      vertical-align: top;
-    }
-
-    .status-active {
-      color: #50fa7b;
-      font-weight: 600;
-    }
-
-    .status-rolled {
-      color: #ffb86c;
-      font-weight: 600;
-    }
-
-    .btn {
-      border: 0;
-      border-radius: 8px;
-      padding: 8px 12px;
-      font-size: 0.9rem;
-      cursor: pointer;
-      background: var(--secondary);
-      color: #f8f8f2;
-    }
-
-    .btn:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
-
-    .top-actions {
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      margin-top: 12px;
-      gap: 8px;
-    }
-  </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
 </head>
-<body>
-  <main class="card">
+<body class="logs-page">
+  <main class="card logs-card">
     <h1>Журнал изменений маршрутов</h1>
     <p class="muted">Отметьте одну или несколько записей и нажмите «Откатить выбранные». Для каждого отката используются данные соответствующей строки лога.</p>
 
@@ -127,12 +19,21 @@
       <div class="alert error">{{ error }}</div>
     {% endif %}
 
-    <form method="post" action="/rollback" onsubmit="return confirm('Откатить все выбранные изменения маршрутов?');">
+    <form id="clear-logs-form" method="post" action="/logs-clear"></form>
+
+    <form id="rollback-form" method="post" action="/rollback">
       <input type="hidden" name="source" value="logs" />
       <div class="top-actions">
         <button class="btn" type="submit">Откатить выбранные</button>
+        <button
+          class="btn danger"
+          type="submit"
+          form="clear-logs-form"
+          onclick="return confirm('Очистить все логи без возможности восстановления?');"
+        >Очистить логи</button>
       </div>
-    <table>
+    <div class="table-wrap">
+    <table class="logs-table">
       <thead>
         <tr>
           <th><input id="select-all-rows" type="checkbox" /></th>
@@ -178,15 +79,63 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     </form>
+
+    <div class="pagination">
+      <form method="get" class="logs-toolbar" style="margin-top: 0;">
+        <div class="inline">
+          <label for="per_page">Записей на странице:</label>
+          <select id="per_page" name="per_page" onchange="this.form.submit()">
+            <option value="10" {% if per_page == '10' %}selected{% endif %}>10</option>
+            <option value="20" {% if per_page == '20' %}selected{% endif %}>20</option>
+            <option value="50" {% if per_page == '50' %}selected{% endif %}>50</option>
+            <option value="100" {% if per_page == '100' %}selected{% endif %}>100</option>
+            <option value="all" {% if per_page == 'all' %}selected{% endif %}>все</option>
+          </select>
+        </div>
+        <div class="muted">Всего записей: {{ total_entries }}</div>
+      </form>
+
+      {% if has_prev %}
+        <a class="btn" href="{{ url_for('logs', page=page-1, per_page=per_page) }}">Назад</a>
+      {% else %}
+        <button class="btn" type="button" disabled>Назад</button>
+      {% endif %}
+
+      <span class="muted">Страница {{ page }} из {{ total_pages }}</span>
+
+      {% if has_next %}
+        <a class="btn" href="{{ url_for('logs', page=page+1, per_page=per_page) }}">Вперед</a>
+      {% else %}
+        <button class="btn" type="button" disabled>Вперед</button>
+      {% endif %}
+    </div>
   </main>
+  <div id="rollback-modal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-title">Откат маршрутов...</div>
+      <div id="rollback-current-item" class="muted">Подготовка...</div>
+      <div id="rollback-progress-text" class="muted">0 / 0</div>
+      <div class="progress-track">
+        <div id="rollback-progress-fill" class="progress-fill"></div>
+      </div>
+    </div>
+  </div>
   <script>
     (function () {
       const selectAll = document.getElementById("select-all-rows");
-      if (!selectAll) return;
+      const rollbackForm = document.getElementById("rollback-form");
+      const rollbackModal = document.getElementById("rollback-modal");
+      const rollbackCurrentItem = document.getElementById("rollback-current-item");
+      const rollbackProgressText = document.getElementById("rollback-progress-text");
+      const rollbackProgressFill = document.getElementById("rollback-progress-fill");
+      if (!selectAll || !rollbackForm) return;
 
       const rowCheckboxes = Array.from(document.querySelectorAll(".rollback-row-checkbox"));
       const activeCheckboxes = rowCheckboxes.filter((box) => !box.disabled);
+      const rollbackButton = rollbackForm.querySelector('button[type="submit"]');
+      let pollTimer = null;
 
       selectAll.addEventListener("change", () => {
         activeCheckboxes.forEach((box) => {
@@ -199,6 +148,108 @@
           const allChecked = activeCheckboxes.length > 0 && activeCheckboxes.every((item) => item.checked);
           selectAll.checked = allChecked;
         });
+      });
+
+      const openModal = () => {
+        rollbackModal.classList.add("show");
+        rollbackModal.setAttribute("aria-hidden", "false");
+      };
+
+      const closeModal = () => {
+        rollbackModal.classList.remove("show");
+        rollbackModal.setAttribute("aria-hidden", "true");
+      };
+
+      const stopPolling = () => {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      };
+
+      const resetUiState = () => {
+        stopPolling();
+        closeModal();
+        if (rollbackButton) rollbackButton.disabled = false;
+      };
+
+      const updateProgress = (current, total, item) => {
+        const safeTotal = Math.max(total || 0, 0);
+        const safeCurrent = Math.max(Math.min(current || 0, safeTotal || current || 0), 0);
+        const percent = safeTotal > 0 ? Math.floor((safeCurrent / safeTotal) * 100) : 0;
+
+        rollbackProgressText.textContent = `${safeCurrent} / ${safeTotal}`;
+        rollbackProgressFill.style.width = `${percent}%`;
+        rollbackCurrentItem.textContent = item ? `Откат: ${item}` : "Завершение...";
+      };
+
+      const pollStatus = async (jobId) => {
+        const response = await fetch(`/rollback-progress/${jobId}`, { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Не удалось получить статус отката.");
+        }
+
+        updateProgress(data.progress_current, data.progress_total, data.current_item);
+        if (data.done) {
+          stopPolling();
+          window.location.href = `/rollback-finish/${jobId}`;
+        }
+      };
+
+      rollbackForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        stopPolling();
+
+        const selectedCount = activeCheckboxes.filter((box) => box.checked).length;
+        if (selectedCount === 0) {
+          alert("Выберите хотя бы одну запись для отката.");
+          return;
+        }
+        if (!confirm("Откатить все выбранные изменения маршрутов?")) {
+          return;
+        }
+
+        updateProgress(0, selectedCount, "Подготовка...");
+        openModal();
+        if (rollbackButton) rollbackButton.disabled = true;
+
+        try {
+          const formData = new FormData(rollbackForm);
+          const startResponse = await fetch("/rollback-start", {
+            method: "POST",
+            body: formData,
+            cache: "no-store"
+          });
+          const startData = await startResponse.json();
+          if (!startResponse.ok || !startData.ok) {
+            throw new Error(startData.error || "Не удалось запустить откат.");
+          }
+
+          updateProgress(0, startData.total || 0, "Подготовка...");
+          await pollStatus(startData.job_id);
+          pollTimer = setInterval(() => {
+            pollStatus(startData.job_id).catch((err) => {
+              stopPolling();
+              closeModal();
+              alert(err.message || "Ошибка получения прогресса отката.");
+              if (rollbackButton) rollbackButton.disabled = false;
+            });
+          }, 700);
+        } catch (err) {
+          stopPolling();
+          closeModal();
+          alert(err.message || "Ошибка запуска отката.");
+          if (rollbackButton) rollbackButton.disabled = false;
+        }
+      });
+
+      window.addEventListener("pageshow", () => {
+        resetUiState();
+      });
+
+      window.addEventListener("beforeunload", () => {
+        stopPolling();
       });
     })();
   </script>

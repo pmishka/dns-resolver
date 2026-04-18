@@ -4,264 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DNS Resolver + MikroTik Routes</title>
-  <style>
-    :root {
-      --card: #282a36;
-      --text: #f8f8f2;
-      --muted: #aab3d1;
-      --accent: #50fa7b;
-      --danger: #ff5555;
-      --border: #44475a;
-      --warn-bg: #3b3354;
-      --warn-border: #bd93f9;
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      font-family: "Segoe UI", Tahoma, sans-serif;
-      background: radial-gradient(circle at 20% 10%, #343746 0%, #282a36 45%, #1f212b 100%);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-
-    .card {
-      width: 100%;
-      max-width: 760px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
-      padding: 22px;
-    }
-
-    h1 {
-      margin: 0 0 8px;
-      font-size: 1.35rem;
-    }
-
-    p.description {
-      margin: 0 0 18px;
-      color: var(--muted);
-      font-size: 0.95rem;
-    }
-
-    .grid {
-      display: grid;
-      gap: 12px;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      margin-bottom: 12px;
-    }
-
-    label {
-      display: block;
-      font-size: 0.86rem;
-      margin-bottom: 6px;
-      color: #bd93f9;
-    }
-
-    input,
-    select,
-    textarea {
-      width: 100%;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px;
-      font-size: 0.95rem;
-      outline: none;
-      font-family: inherit;
-      background: #44475a;
-      color: var(--text);
-    }
-
-    textarea {
-      min-height: 120px;
-      resize: vertical;
-    }
-
-    input:focus,
-    select:focus,
-    textarea:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(80, 250, 123, 0.24);
-    }
-
-    select {
-      appearance: none;
-      -webkit-appearance: none;
-      -moz-appearance: none;
-      padding-right: 38px;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23f8f8f2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 12px center;
-      background-size: 14px;
-    }
-
-    .actions {
-      display: flex;
-      gap: 10px;
-      margin-top: 14px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    .provider-inline {
-      flex: 1 1 280px;
-      max-width: 420px;
-      margin-bottom: 0;
-      color: var(--muted);
-    }
-
-    .actions-separator {
-      color: var(--muted);
-      font-size: 1.05rem;
-      font-weight: 600;
-      line-height: 1;
-      padding: 0 2px;
-      user-select: none;
-    }
-
-    .provider-inline select {
-      background-color: #2f3242;
-      border-color: #6272a4;
-      color: var(--text);
-    }
-
-    .btn {
-      border: 0;
-      border-radius: 8px;
-      padding: 10px 14px;
-      font-size: 0.95rem;
-      cursor: pointer;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-    }
-
-    .primary {
-      background: var(--accent);
-      color: #102014;
-    }
-
-    .secondary {
-      background: #6272a4;
-      color: #f8f8f2;
-    }
-
-    .action-right {
-      margin-left: auto;
-    }
-
-    .section {
-      margin-top: 18px;
-      padding-top: 14px;
-      border-top: 1px solid var(--border);
-    }
-
-    .error {
-      margin-top: 14px;
-      color: var(--danger);
-      font-weight: 600;
-    }
-
-    .warnings {
-      margin-top: 14px;
-      border: 1px solid var(--warn-border);
-      background: var(--warn-bg);
-      border-radius: 8px;
-      padding: 10px 12px;
-    }
-
-    .warnings ul {
-      margin: 8px 0 0;
-      padding-left: 20px;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 10px;
-      font-size: 0.93rem;
-    }
-
-    th,
-    td {
-      text-align: left;
-      border-bottom: 1px solid var(--border);
-      padding: 8px;
-      vertical-align: top;
-    }
-
-    .muted {
-      color: var(--muted);
-      font-size: 0.92rem;
-    }
-
-    .modal-overlay {
-      position: fixed;
-      inset: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      background: rgba(7, 9, 14, 0.66);
-      z-index: 1000;
-      padding: 16px;
-    }
-
-    .modal-overlay.show {
-      display: flex;
-    }
-
-    .modal-card {
-      width: min(520px, 100%);
-      background: #252838;
-      border: 1px solid #6272a4;
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
-    }
-
-    .modal-title {
-      margin: 0 0 8px;
-      font-size: 1.05rem;
-      font-weight: 700;
-    }
-
-    .progress-track {
-      margin-top: 10px;
-      width: 100%;
-      height: 10px;
-      border-radius: 999px;
-      border: 1px solid #525b83;
-      background: #3b3f56;
-      overflow: hidden;
-    }
-
-    .progress-fill {
-      width: 0;
-      height: 100%;
-      background: linear-gradient(90deg, #50fa7b, #85ff9d);
-      transition: width 0.2s ease;
-    }
-
-    .client-error {
-      display: none;
-      margin-top: 14px;
-      color: var(--danger);
-      font-weight: 600;
-    }
-
-    .client-error.show {
-      display: block;
-    }
-  </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
 </head>
 <body>
   <main class="card">
@@ -351,7 +94,7 @@
           </tbody>
         </table>
 
-        <form method="post" action="/add-routes" class="actions" onsubmit="return confirm('Добавить {{ ips | length }} маршрут(ов) в MikroTik?');">
+        <form id="add-routes-form" method="post" action="/add-routes" class="actions">
           <input type="hidden" name="gateway" value="{{ gateway }}" />
           <input type="hidden" name="dns_provider" value="{{ dns_provider }}" />
           <input type="hidden" name="distance" value="{{ distance }}" />
@@ -428,21 +171,39 @@
     </div>
   </div>
 
+  <div id="add-routes-modal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-title">Добавление маршрутов...</div>
+      <div id="add-routes-current-item" class="muted">Подготовка...</div>
+      <div id="add-routes-progress-text" class="muted">0 / 0</div>
+      <div class="progress-track">
+        <div id="add-routes-progress-fill" class="progress-fill"></div>
+      </div>
+    </div>
+  </div>
+
   <script>
     (function () {
       const form = document.getElementById("resolve-form");
       if (!form) return;
+      const addRoutesForm = document.getElementById("add-routes-form");
 
       const modal = document.getElementById("resolve-modal");
+      const addRoutesModal = document.getElementById("add-routes-modal");
       const currentDomainEl = document.getElementById("resolve-current-domain");
       const progressTextEl = document.getElementById("resolve-progress-text");
       const progressFillEl = document.getElementById("resolve-progress-fill");
+      const addCurrentItemEl = document.getElementById("add-routes-current-item");
+      const addProgressTextEl = document.getElementById("add-routes-progress-text");
+      const addProgressFillEl = document.getElementById("add-routes-progress-fill");
       const clientErrorEl = document.getElementById("client-error");
       const submitButton = form.querySelector('button[type="submit"]');
+      const addRoutesSubmitButton = addRoutesForm ? addRoutesForm.querySelector('button[type="submit"]') : null;
       const commentPrefixInput = document.getElementById("comment_prefix");
       const addRoutesCommentPrefixInput = document.getElementById("add-routes-comment-prefix");
 
       let pollTimer = null;
+      let addPollTimer = null;
 
       const setClientError = (message) => {
         if (!clientErrorEl) return;
@@ -455,14 +216,16 @@
         clientErrorEl.classList.add("show");
       };
 
-      const openModal = () => {
-        modal.classList.add("show");
-        modal.setAttribute("aria-hidden", "false");
+      const openModal = (targetModal) => {
+        if (!targetModal) return;
+        targetModal.classList.add("show");
+        targetModal.setAttribute("aria-hidden", "false");
       };
 
-      const closeModal = () => {
-        modal.classList.remove("show");
-        modal.setAttribute("aria-hidden", "true");
+      const closeModal = (targetModal) => {
+        if (!targetModal) return;
+        targetModal.classList.remove("show");
+        targetModal.setAttribute("aria-hidden", "true");
       };
 
       const updateProgress = (current, total, domain) => {
@@ -479,6 +242,13 @@
         if (pollTimer) {
           clearInterval(pollTimer);
           pollTimer = null;
+        }
+      };
+
+      const stopAddPolling = () => {
+        if (addPollTimer) {
+          clearInterval(addPollTimer);
+          addPollTimer = null;
         }
       };
 
@@ -508,12 +278,37 @@
         }
       };
 
+      const updateAddProgress = (current, total, item) => {
+        const safeTotal = Math.max(total || 0, 0);
+        const safeCurrent = Math.max(Math.min(current || 0, safeTotal || current || 0), 0);
+        const percent = safeTotal > 0 ? Math.floor((safeCurrent / safeTotal) * 100) : 0;
+
+        addProgressTextEl.textContent = `${safeCurrent} / ${safeTotal}`;
+        addProgressFillEl.style.width = `${percent}%`;
+        addCurrentItemEl.textContent = item ? `adding ${item}` : "Завершение...";
+      };
+
+      const pollAddStatus = async (jobId) => {
+        const response = await fetch(`/add-routes-progress/${jobId}`, { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Не удалось получить статус добавления.");
+        }
+
+        updateAddProgress(data.progress_current, data.progress_total, data.current_item);
+
+        if (data.done) {
+          stopAddPolling();
+          window.location.href = `/add-routes-finish/${jobId}`;
+        }
+      };
+
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         stopPolling();
         setClientError("");
         updateProgress(0, 0, "Подготовка...");
-        openModal();
+        openModal(modal);
 
         if (submitButton) submitButton.disabled = true;
 
@@ -536,18 +331,63 @@
           pollTimer = setInterval(() => {
             pollStatus(startData.job_id).catch((err) => {
               stopPolling();
-              closeModal();
+              closeModal(modal);
               setClientError(err.message || "Ошибка получения прогресса.");
               if (submitButton) submitButton.disabled = false;
             });
           }, 700);
         } catch (err) {
           stopPolling();
-          closeModal();
+          closeModal(modal);
           setClientError(err.message || "Ошибка запуска резолва.");
           if (submitButton) submitButton.disabled = false;
         }
       });
+
+      if (addRoutesForm) {
+        addRoutesForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          stopAddPolling();
+          setClientError("");
+          if (!confirm("Добавить выбранные маршруты в MikroTik?")) {
+            return;
+          }
+
+          updateAddProgress(0, 0, "Подготовка...");
+          openModal(addRoutesModal);
+          if (addRoutesSubmitButton) addRoutesSubmitButton.disabled = true;
+
+          try {
+            const formData = new FormData(addRoutesForm);
+            const startResponse = await fetch("/add-routes-start", {
+              method: "POST",
+              body: formData,
+              cache: "no-store"
+            });
+            const startData = await startResponse.json();
+            if (!startResponse.ok || !startData.ok) {
+              throw new Error(startData.error || "Не удалось запустить добавление маршрутов.");
+            }
+
+            updateAddProgress(0, startData.total || 0, "Подготовка...");
+            await pollAddStatus(startData.job_id);
+
+            addPollTimer = setInterval(() => {
+              pollAddStatus(startData.job_id).catch((err) => {
+                stopAddPolling();
+                closeModal(addRoutesModal);
+                setClientError(err.message || "Ошибка получения прогресса добавления.");
+                if (addRoutesSubmitButton) addRoutesSubmitButton.disabled = false;
+              });
+            }, 700);
+          } catch (err) {
+            stopAddPolling();
+            closeModal(addRoutesModal);
+            setClientError(err.message || "Ошибка запуска добавления маршрутов.");
+            if (addRoutesSubmitButton) addRoutesSubmitButton.disabled = false;
+          }
+        });
+      }
 
       if (commentPrefixInput) {
         commentPrefixInput.addEventListener("input", applyCommentPrefixToResolvedTable);
