@@ -52,20 +52,20 @@
 ### Обязательные
 - `APP_SECRET_KEY` — секрет Flask сессий.
 - `GATEWAYS` — список доступных gateway/interface для UI.
+- `MIKROTIK_HOST` — адрес MikroTik.
+- `MIKROTIK_PORT` — порт API MikroTik.
+- `MIKROTIK_SSL` — использовать SSL (`true/false`).
 - `MIKROTIK_USERNAME` — логин API пользователя MikroTik.
 - `MIKROTIK_PASSWORD` — пароль API пользователя MikroTik.
 
 ### Рекомендуемые
-- `MIKROTIK_HOST` (по умолчанию `gateway.home`)
-- `MIKROTIK_PORT` (по умолчанию `18728`)
-- `MIKROTIK_SSL` (`true/false`, по умолчанию `false`)
+- `DEFAULT_DISTANCE` (по умолчанию `20`)
+- `DEFAULT_COMMENT_PREFIX` (по умолчанию пусто)
 
 ### Опциональные
 - `APP_PORT` (по умолчанию `5000`)
 - `DNS_PROVIDERS` — список DNS провайдеров в UI.
 - `DEFAULT_DNS_PROVIDER` (по умолчанию `google`)
-- `DEFAULT_DISTANCE` (по умолчанию `20`)
-- `DEFAULT_COMMENT_PREFIX` (по умолчанию пусто)
 - `DNS_REQUEST_TIMEOUT_SECONDS` (по умолчанию `3`)
 - `RESOLVE_MAX_DURATION_SECONDS` (по умолчанию `55`)
 - `RESOLVE_CACHE_DIR` (по умолчанию `/tmp/dns_resolver_resolves`)
