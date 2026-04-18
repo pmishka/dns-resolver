@@ -1,0 +1,9 @@
+services:
+  dns-resolver:
+    build: .
+    container_name: dns_resolver
+    env_file:
+      - .env
+    ports:
+      - "8811:5000"
+    restart: unless-stopped

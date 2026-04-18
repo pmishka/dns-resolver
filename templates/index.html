@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DNS Resolver + MikroTik Routes</title>
+  <style>
+    :root {
+      --card: #282a36;
+      --text: #f8f8f2;
+      --muted: #aab3d1;
+      --accent: #50fa7b;
+      --danger: #ff5555;
+      --border: #44475a;
+      --warn-bg: #3b3354;
+      --warn-border: #bd93f9;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at 20% 10%, #343746 0%, #282a36 45%, #1f212b 100%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 760px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      padding: 22px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.35rem;
+    }
+
+    p.description {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: block;
+      font-size: 0.86rem;
+      margin-bottom: 6px;
+      color: #bd93f9;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 0.95rem;
+      outline: none;
+      font-family: inherit;
+      background: #44475a;
+      color: var(--text);
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(80, 250, 123, 0.24);
+    }
+
+    select {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      padding-right: 38px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23f8f8f2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      background-size: 14px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .provider-inline {
+      flex: 1 1 280px;
+      max-width: 420px;
+      margin-bottom: 0;
+      color: var(--muted);
+    }
+
+    .actions-separator {
+      color: var(--muted);
+      font-size: 1.05rem;
+      font-weight: 600;
+      line-height: 1;
+      padding: 0 2px;
+      user-select: none;
+    }
+
+    .provider-inline select {
+      background-color: #2f3242;
+      border-color: #6272a4;
+      color: var(--text);
+    }
+
+    .btn {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
+
+    .primary {
+      background: var(--accent);
+      color: #102014;
+    }
+
+    .secondary {
+      background: #6272a4;
+      color: #f8f8f2;
+    }
+
+    .action-right {
+      margin-left: auto;
+    }
+
+    .section {
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    .error {
+      margin-top: 14px;
+      color: var(--danger);
+      font-weight: 600;
+    }
+
+    .warnings {
+      margin-top: 14px;
+      border: 1px solid var(--warn-border);
+      background: var(--warn-bg);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    .warnings ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 0.93rem;
+    }
+
+    th,
+    td {
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      padding: 8px;
+      vertical-align: top;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(7, 9, 14, 0.66);
+      z-index: 1000;
+      padding: 16px;
+    }
+
+    .modal-overlay.show {
+      display: flex;
+    }
+
+    .modal-card {
+      width: min(520px, 100%);
+      background: #252838;
+      border: 1px solid #6272a4;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+    }
+
+    .modal-title {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+      font-weight: 700;
+    }
+
+    .progress-track {
+      margin-top: 10px;
+      width: 100%;
+      height: 10px;
+      border-radius: 999px;
+      border: 1px solid #525b83;
+      background: #3b3f56;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      width: 0;
+      height: 100%;
+      background: linear-gradient(90deg, #50fa7b, #85ff9d);
+      transition: width 0.2s ease;
+    }
+
+    .client-error {
+      display: none;
+      margin-top: 14px;
+      color: var(--danger);
+      font-weight: 600;
+    }
+
+    .client-error.show {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>DNS Resolver + MikroTik Routes</h1>
+    <p class="description">Укажите домены (по одному в строке), приложение найдет A-записи и добавит недостающие маршруты с комментарием от DNS-имени.</p>
+
+    <form id="resolve-form" method="post" action="/resolve">
+      <div class="grid">
+        <div>
+          <label for="gateway">Gateway</label>
+          <select id="gateway" name="gateway" required>
+            {% for option in gateway_options %}
+              <option value="{{ option.value }}" {% if option.value == gateway %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="distance">Distance</label>
+          <input id="distance" name="distance" type="number" value="{{ distance }}" required />
+        </div>
+        <div>
+          <label for="comment_prefix">Comment Prefix</label>
+          <input id="comment_prefix" name="comment_prefix" value="{{ comment_prefix }}" placeholder="prod / office / any" />
+        </div>
+        <div style="grid-column: 1 / -1;">
+          <label for="domains">Домены (каждый с новой строки)</label>
+          <textarea id="domains" name="domains" placeholder="example.com&#10;api.example.com" required>{{ domains_text }}</textarea>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" type="submit">Найти адреса</button>
+        <span class="actions-separator">В</span>
+        <label class="provider-inline" for="dns_provider">
+          <select id="dns_provider" name="dns_provider" required>
+            {% for option in dns_provider_options %}
+              <option value="{{ option.key }}" {% if option.key == dns_provider %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <a class="btn primary action-right" href="/logs" target="_blank" rel="noopener noreferrer">Лог добавления</a>
+      </div>
+    </form>
+
+    <div id="client-error" class="client-error"></div>
+
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+
+    {% if audit_error %}
+      <div class="error">{{ audit_error }}</div>
+    {% endif %}
+
+    {% if audit_message %}
+      <div class="warnings">{{ audit_message }}</div>
+    {% endif %}
+
+    {% if warnings %}
+      <div class="warnings">
+        <strong>Предупреждения:</strong>
+        <ul>
+          {% for warning in warnings %}
+            <li>{{ warning }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    {% if ip_entries %}
+      <section class="section">
+        <strong>Найденные IP-адреса и DNS-имя для комментария:</strong>
+        <table>
+          <thead>
+            <tr>
+              <th>IP</th>
+              <th>Комментарий (DNS имя)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in ip_entries %}
+              <tr>
+                <td>{{ row.ip }}</td>
+                <td class="resolved-comment-cell" data-base-comment="{{ row.base_comment }}">{{ row.comment }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <form method="post" action="/add-routes" class="actions" onsubmit="return confirm('Добавить {{ ips | length }} маршрут(ов) в MikroTik?');">
+          <input type="hidden" name="gateway" value="{{ gateway }}" />
+          <input type="hidden" name="dns_provider" value="{{ dns_provider }}" />
+          <input type="hidden" name="distance" value="{{ distance }}" />
+          <input id="add-routes-comment-prefix" type="hidden" name="comment_prefix" value="{{ comment_prefix }}" />
+          <input type="hidden" name="domains" value="{{ domains_text }}" />
+          <input type="hidden" name="resolve_id" value="{{ resolve_id }}" />
+          <button class="btn secondary" type="submit">Добавить в маршруты</button>
+        </form>
+      </section>
+    {% endif %}
+
+    {% if result %}
+      <section class="section">
+        <strong>Результат:</strong>
+        <p class="muted">Добавлено: {{ result.added | length }} | Пропущено (уже покрыто): {{ result.skipped | length }}</p>
+
+        {% if result.added %}
+          <p><strong>Добавлены:</strong></p>
+          <table>
+            <thead>
+              <tr>
+                <th>IP</th>
+                <th>Комментарий</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in result.added %}
+                <tr>
+                  <td>{{ row.ip }}</td>
+                  <td>{{ row.comment }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+
+        {% if result.skipped %}
+          <p><strong>Пропущены:</strong></p>
+          <table>
+            <thead>
+              <tr>
+                <th>IP</th>
+                <th>Покрывающий маршрут</th>
+                <th>Gateway</th>
+                <th>Distance</th>
+                <th>Комментарий маршрута</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in result.skipped %}
+                <tr>
+                  <td>{{ row.ip }}</td>
+                  <td>{{ row.dst_address or '-' }}</td>
+                  <td>{{ row.gateway or '-' }}</td>
+                  <td>{{ row.distance or '-' }}</td>
+                  <td>{{ row.comment or '-' }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+      </section>
+    {% endif %}
+  </main>
+
+  <div id="resolve-modal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-title">Резолв доменов...</div>
+      <div id="resolve-current-domain" class="muted">Подготовка...</div>
+      <div id="resolve-progress-text" class="muted">0 / 0</div>
+      <div class="progress-track">
+        <div id="resolve-progress-fill" class="progress-fill"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const form = document.getElementById("resolve-form");
+      if (!form) return;
+
+      const modal = document.getElementById("resolve-modal");
+      const currentDomainEl = document.getElementById("resolve-current-domain");
+      const progressTextEl = document.getElementById("resolve-progress-text");
+      const progressFillEl = document.getElementById("resolve-progress-fill");
+      const clientErrorEl = document.getElementById("client-error");
+      const submitButton = form.querySelector('button[type="submit"]');
+      const commentPrefixInput = document.getElementById("comment_prefix");
+      const addRoutesCommentPrefixInput = document.getElementById("add-routes-comment-prefix");
+
+      let pollTimer = null;
+
+      const setClientError = (message) => {
+        if (!clientErrorEl) return;
+        if (!message) {
+          clientErrorEl.classList.remove("show");
+          clientErrorEl.textContent = "";
+          return;
+        }
+        clientErrorEl.textContent = message;
+        clientErrorEl.classList.add("show");
+      };
+
+      const openModal = () => {
+        modal.classList.add("show");
+        modal.setAttribute("aria-hidden", "false");
+      };
+
+      const closeModal = () => {
+        modal.classList.remove("show");
+        modal.setAttribute("aria-hidden", "true");
+      };
+
+      const updateProgress = (current, total, domain) => {
+        const safeTotal = Math.max(total || 0, 0);
+        const safeCurrent = Math.max(Math.min(current || 0, safeTotal || current || 0), 0);
+        const percent = safeTotal > 0 ? Math.floor((safeCurrent / safeTotal) * 100) : 0;
+
+        progressTextEl.textContent = `${safeCurrent} / ${safeTotal}`;
+        progressFillEl.style.width = `${percent}%`;
+        currentDomainEl.textContent = domain ? `resolving ${domain}` : "Завершение...";
+      };
+
+      const stopPolling = () => {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      };
+
+      const applyCommentPrefixToResolvedTable = () => {
+        const prefix = (commentPrefixInput && commentPrefixInput.value ? commentPrefixInput.value : "").trim();
+        document.querySelectorAll(".resolved-comment-cell").forEach((cell) => {
+          const base = (cell.getAttribute("data-base-comment") || "").trim();
+          cell.textContent = prefix ? `${prefix}: ${base}` : base;
+        });
+        if (addRoutesCommentPrefixInput) {
+          addRoutesCommentPrefixInput.value = prefix;
+        }
+      };
+
+      const pollStatus = async (jobId) => {
+        const response = await fetch(`/resolve-progress/${jobId}`, { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Не удалось получить статус резолва.");
+        }
+
+        updateProgress(data.progress_current, data.progress_total, data.current_domain);
+
+        if (data.done) {
+          stopPolling();
+          window.location.href = `/resolve-finish/${jobId}`;
+        }
+      };
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        stopPolling();
+        setClientError("");
+        updateProgress(0, 0, "Подготовка...");
+        openModal();
+
+        if (submitButton) submitButton.disabled = true;
+
+        try {
+          const formData = new FormData(form);
+          const startResponse = await fetch("/resolve-start", {
+            method: "POST",
+            body: formData,
+            cache: "no-store"
+          });
+          const startData = await startResponse.json();
+
+          if (!startResponse.ok || !startData.ok) {
+            throw new Error(startData.error || "Не удалось запустить резолв.");
+          }
+
+          updateProgress(0, startData.total || 0, "Подготовка...");
+
+          await pollStatus(startData.job_id);
+          pollTimer = setInterval(() => {
+            pollStatus(startData.job_id).catch((err) => {
+              stopPolling();
+              closeModal();
+              setClientError(err.message || "Ошибка получения прогресса.");
+              if (submitButton) submitButton.disabled = false;
+            });
+          }, 700);
+        } catch (err) {
+          stopPolling();
+          closeModal();
+          setClientError(err.message || "Ошибка запуска резолва.");
+          if (submitButton) submitButton.disabled = false;
+        }
+      });
+
+      if (commentPrefixInput) {
+        commentPrefixInput.addEventListener("input", applyCommentPrefixToResolvedTable);
+      }
+      applyCommentPrefixToResolvedTable();
+    })();
+  </script>
+</body>
+</html>

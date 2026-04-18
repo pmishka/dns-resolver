@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DNS Resolver Audit Logs</title>
+  <style>
+    :root {
+      --card: #282a36;
+      --text: #f8f8f2;
+      --muted: #aab3d1;
+      --accent: #50fa7b;
+      --danger: #ff5555;
+      --border: #44475a;
+      --warn-bg: #3b3354;
+      --warn-border: #bd93f9;
+      --secondary: #6272a4;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at 20% 10%, #343746 0%, #282a36 45%, #1f212b 100%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 1100px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      padding: 22px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.35rem;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .alert {
+      margin: 14px 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--warn-border);
+      background: var(--warn-bg);
+    }
+
+    .error {
+      border-color: var(--danger);
+      color: #ffd6d6;
+      background: #4a2a37;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 0.9rem;
+    }
+
+    th,
+    td {
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      padding: 8px;
+      vertical-align: top;
+    }
+
+    .status-active {
+      color: #50fa7b;
+      font-weight: 600;
+    }
+
+    .status-rolled {
+      color: #ffb86c;
+      font-weight: 600;
+    }
+
+    .btn {
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      background: var(--secondary);
+      color: #f8f8f2;
+    }
+
+    .btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      margin-top: 12px;
+      gap: 8px;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Журнал изменений маршрутов</h1>
+    <p class="muted">Отметьте одну или несколько записей и нажмите «Откатить выбранные». Для каждого отката используются данные соответствующей строки лога.</p>
+
+    {% if message %}
+      <div class="alert">{{ message }}</div>
+    {% endif %}
+
+    {% if error %}
+      <div class="alert error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/rollback" onsubmit="return confirm('Откатить все выбранные изменения маршрутов?');">
+      <input type="hidden" name="source" value="logs" />
+      <div class="top-actions">
+        <button class="btn" type="submit">Откатить выбранные</button>
+      </div>
+    <table>
+      <thead>
+        <tr>
+          <th><input id="select-all-rows" type="checkbox" /></th>
+          <th>Время</th>
+          <th>Источник</th>
+          <th>Статус</th>
+          <th>Dst</th>
+          <th>Gateway</th>
+          <th>Distance</th>
+          <th>Comment</th>
+          <th>Route ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in audit_entries %}
+          {% set route = entry.route or {} %}
+          {% set source = entry.source or {} %}
+          <tr>
+            <td>
+              <input
+                class="rollback-row-checkbox"
+                type="checkbox"
+                name="entry_ids"
+                value="{{ entry.id }}"
+                {% if entry.status == 'rolled_back' %}disabled{% endif %}
+              />
+            </td>
+            <td>{{ entry.created_at }}</td>
+            <td>{{ source.source_display or source.source_ip or source.remote_addr or '-' }}</td>
+            <td>
+              {% if entry.status == 'rolled_back' %}
+                <span class="status-rolled">rolled_back</span>
+              {% else %}
+                <span class="status-active">active</span>
+              {% endif %}
+            </td>
+            <td>{{ route.dst_address }}</td>
+            <td>{{ route.gateway }}</td>
+            <td>{{ route.distance }}</td>
+            <td>{{ route.comment }}</td>
+            <td>{{ route.route_id or '-' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </form>
+  </main>
+  <script>
+    (function () {
+      const selectAll = document.getElementById("select-all-rows");
+      if (!selectAll) return;
+
+      const rowCheckboxes = Array.from(document.querySelectorAll(".rollback-row-checkbox"));
+      const activeCheckboxes = rowCheckboxes.filter((box) => !box.disabled);
+
+      selectAll.addEventListener("change", () => {
+        activeCheckboxes.forEach((box) => {
+          box.checked = selectAll.checked;
+        });
+      });
+
+      rowCheckboxes.forEach((box) => {
+        box.addEventListener("change", () => {
+          const allChecked = activeCheckboxes.length > 0 && activeCheckboxes.every((item) => item.checked);
+          selectAll.checked = allChecked;
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
