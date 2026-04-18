@@ -5,7 +5,7 @@
 - принимает много доменов (по одному в строке)
 - показывает прогресс резолва в модальном окне (`resolving <domain>`, прогресс `N / M`)
 - добавляет только недостающие маршруты в MikroTik
-- поддерживает журнал изменений и откат (одиночный и пакетный)
+- поддерживает журнал изменений и откат (одиночный и пакетный) с прогрессом
 
 ## Что умеет
 
@@ -15,7 +15,9 @@
   - `Comment Prefix` (опционально)
   - `Домены` (многострочное поле)
 - Кнопка `Найти адреса` запускает асинхронный резолв и показывает live-прогресс.
+- Кнопка `Добавить в маршруты` запускает асинхронное добавление и показывает live-прогресс.
 - При изменении `Comment Prefix` комментарии в таблице найденных IP обновляются сразу (без повторного резолва).
+- При смене `Gateway` автоматически подставляется `Distance` по умолчанию для выбранного gateway (если задан в конфиге).
 - Перед добавлением маршрутов есть подтверждение.
 - После POST используется `POST -> Redirect -> GET`, поэтому при `F5 / Cmd+R` всегда открывается `/`.
 
@@ -40,7 +42,10 @@
 - В окне логов есть:
   - чекбокс в каждой строке
   - чекбокс «выбрать все»
-  - кнопка `Откатить выбранные` для пакетного отката
+  - кнопка `Откатить выбранные` для пакетного отката с live-прогрессом
+  - сортировка: сначала `active` по дате (новые сверху), потом `rolled_back` по дате
+  - пагинация и выбор размера страницы (`10/20/50/100/все`)
+  - кнопка `Очистить логи` с подтверждением
 
 ## Конфигурация через переменные окружения
 
@@ -79,7 +84,7 @@
 APP_PORT=5000
 APP_SECRET_KEY=replace_with_long_random_secret
 
-GATEWAYS=192.168.222.201|default|Отправить в VPN,Infolink-eth4||Исключить из VPN,192.168.61.1
+GATEWAYS=192.168.222.201|20|default|Отправить в VPN,Infolink-eth4|2||Убрать из VPN,192.168.61.1|||Прямой шлюз
 DEFAULT_DISTANCE=20
 DEFAULT_COMMENT_PREFIX=
 
@@ -113,17 +118,21 @@ GUNICORN_TIMEOUT=180
 
 Форматы элемента:
 - `gateway`
-- `gateway|default|label`
-- `gateway||label`
+- `gateway|default_distance|default|label`
+
+Поля после `gateway` позиционные. Если поле пропускается, оставьте его пустым:
+- `gateway|||label`
+- `gateway|2||label`
 
 Где:
 - `gateway` — реальное значение, которое отправляется в MikroTik
-- `default` — выбрать по умолчанию на форме
+- `default_distance` — дистанция по умолчанию для этого gateway (опционально)
+- `default` — признак gateway по умолчанию на форме (`default`, `true`, `1`, `yes`, `*`)
 - `label` — отображаемое имя в UI
 
 Пример:
 ```env
-GATEWAYS=192.168.222.201|default|Отправить в VPN,Infolink-eth4||Исключить из VPN,192.168.61.1
+GATEWAYS=192.168.222.201|20|default|Отправить в VPN,Infolink-eth4|2||Убрать из VPN,192.168.61.1|||Прямой шлюз
 ```
 
 ## Формат `DNS_PROVIDERS`
@@ -164,7 +173,7 @@ python app.py
 ```yaml
 services:
   dns-resolver:
-    image: mikhailpyrochkin/dns-resolver:latest
+    image: mikhailpyrochkin/dns-resolver:1.0.1
     container_name: dns_resolver
     env_file:
       - .env
@@ -201,7 +210,7 @@ docker run -d \
   -e AUDIT_DB_PATH=/data/audit.db \
   -p 8811:5000 \
   -v dns_resolver_data:/data \
-  mikhailpyrochkin/dns-resolver:latest
+  mikhailpyrochkin/dns-resolver:1.0.1
 ```
 
 Вариант с bind-mount на хосте:
@@ -216,5 +225,5 @@ docker run -d \
   -e AUDIT_DB_PATH=/data/audit.db \
   -p 8811:5000 \
   -v "$(pwd)/dns_resolver_data:/data" \
-  mikhailpyrochkin/dns-resolver:latest
+  mikhailpyrochkin/dns-resolver:1.0.1
 ```
