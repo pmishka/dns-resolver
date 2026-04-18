@@ -130,6 +130,8 @@ GUNICORN_TIMEOUT=180
 - `default` — признак gateway по умолчанию на форме (`default`, `true`, `1`, `yes`, `*`)
 - `label` — отображаемое имя в UI
 
+Если у gateway не указан `default_distance`, в интерфейсе автоматически подставляется `DEFAULT_DISTANCE`.
+
 Пример:
 ```env
 GATEWAYS=192.168.222.201|20|default|Отправить в VPN,Infolink-eth4|2||Убрать из VPN,192.168.61.1|||Прямой шлюз

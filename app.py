@@ -786,6 +786,7 @@ def base_context() -> dict[str, Any]:
         "gateway_options": GATEWAY_OPTIONS,
         "dns_provider": UI_DEFAULT_DNS_PROVIDER,
         "dns_provider_options": DNS_PROVIDERS,
+        "default_distance": DEFAULT_DISTANCE,
         "distance": get_default_distance_for_gateway(UI_DEFAULT_GATEWAY),
         "comment_prefix": DEFAULT_COMMENT_PREFIX,
         "domains_text": "",

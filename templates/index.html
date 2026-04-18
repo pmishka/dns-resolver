@@ -15,7 +15,7 @@
       <div class="grid">
         <div>
           <label for="gateway">Gateway</label>
-          <select id="gateway" name="gateway" required>
+          <select id="gateway" name="gateway" data-global-default-distance="{{ default_distance }}" required>
             {% for option in gateway_options %}
               <option
                 value="{{ option.value }}"
@@ -274,10 +274,12 @@
         if (!gatewayInput || !distanceInput) return;
         const selected = gatewayInput.options[gatewayInput.selectedIndex];
         const gatewayDistance = (selected && selected.dataset ? selected.dataset.defaultDistance || "" : "").trim();
-        if (!gatewayDistance) return;
-        distanceInput.value = gatewayDistance;
+        const globalDefaultDistance = (gatewayInput.dataset ? gatewayInput.dataset.globalDefaultDistance || "" : "").trim();
+        const nextDistance = gatewayDistance || globalDefaultDistance;
+        if (!nextDistance) return;
+        distanceInput.value = nextDistance;
         if (addRoutesDistanceInput) {
-          addRoutesDistanceInput.value = gatewayDistance;
+          addRoutesDistanceInput.value = nextDistance;
         }
       };
 
