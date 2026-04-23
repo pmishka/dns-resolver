@@ -4,6 +4,7 @@ import os
 import socket
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,9 @@ RESOLVE_CACHE_DIR = Path(os.getenv("RESOLVE_CACHE_DIR", "/tmp/dns_resolver_resol
 RESOLVE_CACHE_TTL_SECONDS = int(os.getenv("RESOLVE_CACHE_TTL_SECONDS", "1800"))
 DNS_REQUEST_TIMEOUT_SECONDS = float(os.getenv("DNS_REQUEST_TIMEOUT_SECONDS", "3"))
 RESOLVE_MAX_DURATION_SECONDS = int(os.getenv("RESOLVE_MAX_DURATION_SECONDS", "55"))
+DNS_COLLECT_ATTEMPTS = max(1, int(os.getenv("DNS_COLLECT_ATTEMPTS", "5")))
+DNS_COLLECT_STABLE_ROUNDS = max(1, int(os.getenv("DNS_COLLECT_STABLE_ROUNDS", "2")))
+DNS_COLLECT_DELAY_MS = max(0, int(os.getenv("DNS_COLLECT_DELAY_MS", "250")))
 AUDIT_DB_PATH = Path(os.getenv("AUDIT_DB_PATH", "/tmp/dns_resolver_audit.db"))
 AUDIT_LOG_MAX_ENTRIES = int(os.getenv("AUDIT_LOG_MAX_ENTRIES", "200"))
 INDEX_CONTEXT_SESSION_KEY = "index_context"
@@ -380,6 +384,36 @@ def resolve_ips(domain: str, provider_key: str) -> list[str]:
     response = requests.get(endpoint, params=params, timeout=DNS_REQUEST_TIMEOUT_SECONDS)
     response.raise_for_status()
     return extract_a_record_ips(response.json())
+
+
+def collect_resolved_ips(
+    domain: str,
+    provider_key: str,
+    attempt_progress_hook: Any = None,
+) -> list[str]:
+    collected: set[str] = set()
+    stable_rounds = 0
+
+    for attempt in range(1, DNS_COLLECT_ATTEMPTS + 1):
+        if callable(attempt_progress_hook):
+            attempt_progress_hook(attempt, DNS_COLLECT_ATTEMPTS)
+
+        ips = resolve_ips(domain, provider_key)
+        before_count = len(collected)
+        collected.update(ips)
+        if len(collected) == before_count:
+            stable_rounds += 1
+        else:
+            stable_rounds = 0
+
+        # Stop early if repeated attempts no longer discover new IPs.
+        if stable_rounds >= DNS_COLLECT_STABLE_ROUNDS:
+            break
+
+        if attempt < DNS_COLLECT_ATTEMPTS and DNS_COLLECT_DELAY_MS > 0:
+            time.sleep(DNS_COLLECT_DELAY_MS / 1000.0)
+
+    return sorted(collected)
 
 
 def parse_route_network(route: dict[str, Any]) -> ipaddress._BaseNetwork | None:
@@ -872,6 +906,10 @@ def execute_resolve(
     total_domains = len(domains)
 
     for idx, domain in enumerate(domains, start=1):
+        def domain_attempt_progress(attempt: int, total_attempts: int) -> None:
+            if callable(progress_hook):
+                progress_hook(idx, total_domains, f"{domain} ({attempt}/{total_attempts})")
+
         if callable(progress_hook):
             progress_hook(idx, total_domains, domain)
 
@@ -884,12 +922,12 @@ def execute_resolve(
             break
 
         try:
-            resolved_ips = resolve_ips(domain, context["dns_provider"])
+            resolved_ips = collect_resolved_ips(domain, context["dns_provider"], domain_attempt_progress)
         except Exception as exc:
             fallback_provider = "google"
             if context["dns_provider"] != fallback_provider and fallback_provider in DNS_PROVIDER_ENDPOINTS:
                 try:
-                    resolved_ips = resolve_ips(domain, fallback_provider)
+                    resolved_ips = collect_resolved_ips(domain, fallback_provider, domain_attempt_progress)
                     source_label = DNS_PROVIDER_LABELS.get(context["dns_provider"], context["dns_provider"])
                     fallback_label = DNS_PROVIDER_LABELS.get(fallback_provider, fallback_provider)
                     warnings.append(

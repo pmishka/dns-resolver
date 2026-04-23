@@ -15,6 +15,7 @@
   - `Comment Prefix` (опционально)
   - `Домены` (многострочное поле)
 - Кнопка `Найти адреса` запускает асинхронный резолв и показывает live-прогресс.
+- Для каждого домена выполняется несколько попыток резолва с объединением найденных IP (уменьшает потери адресов на CDN/geo DNS).
 - Кнопка `Добавить в маршруты` запускает асинхронное добавление и показывает live-прогресс.
 - При изменении `Comment Prefix` комментарии в таблице найденных IP обновляются сразу (без повторного резолва).
 - При смене `Gateway` автоматически подставляется `Distance` по умолчанию для выбранного gateway (если задан в конфиге).
@@ -24,6 +25,7 @@
 ## Логика добавления маршрутов
 
 - Для каждого домена запрашиваются A-записи через выбранный DNS-провайдер.
+- Для каждого домена выполняется серия DNS-запросов, результаты объединяются; процесс может завершиться раньше, если новые IP перестали появляться.
 - Комментарий для маршрута:
   - `<prefix>: <dns-name>` если заполнен `Comment Prefix`
   - `<dns-name>` если `Comment Prefix` пустой
@@ -67,6 +69,9 @@
 - `DNS_PROVIDERS` — список DNS провайдеров в UI.
 - `DEFAULT_DNS_PROVIDER` (по умолчанию `google`)
 - `DNS_REQUEST_TIMEOUT_SECONDS` (по умолчанию `3`)
+- `DNS_COLLECT_ATTEMPTS` (по умолчанию `5`)
+- `DNS_COLLECT_STABLE_ROUNDS` (по умолчанию `2`)
+- `DNS_COLLECT_DELAY_MS` (по умолчанию `250`)
 - `RESOLVE_MAX_DURATION_SECONDS` (по умолчанию `55`)
 - `RESOLVE_CACHE_DIR` (по умолчанию `/tmp/dns_resolver_resolves`)
 - `RESOLVE_CACHE_TTL_SECONDS` (по умолчанию `1800`)
@@ -91,6 +96,9 @@ DEFAULT_COMMENT_PREFIX=
 DNS_PROVIDERS=google|Google DNS|https://dns.google/resolve,cloudflare|Cloudflare DNS|https://cloudflare-dns.com/dns-query,yandex|Yandex DNS|ns://77.88.8.8,system|System DNS|system
 DEFAULT_DNS_PROVIDER=google
 DNS_REQUEST_TIMEOUT_SECONDS=3
+DNS_COLLECT_ATTEMPTS=5
+DNS_COLLECT_STABLE_ROUNDS=2
+DNS_COLLECT_DELAY_MS=250
 RESOLVE_MAX_DURATION_SECONDS=55
 
 MIKROTIK_HOST=gateway.home
@@ -175,7 +183,7 @@ python app.py
 ```yaml
 services:
   dns-resolver:
-    image: mikhailpyrochkin/dns-resolver:1.0.1
+    image: mikhailpyrochkin/dns-resolver:1.0.2
     container_name: dns_resolver
     env_file:
       - .env
@@ -212,7 +220,7 @@ docker run -d \
   -e AUDIT_DB_PATH=/data/audit.db \
   -p 8811:5000 \
   -v dns_resolver_data:/data \
-  mikhailpyrochkin/dns-resolver:1.0.1
+  mikhailpyrochkin/dns-resolver:1.0.2
 ```
 
 Вариант с bind-mount на хосте:
@@ -227,5 +235,5 @@ docker run -d \
   -e AUDIT_DB_PATH=/data/audit.db \
   -p 8811:5000 \
   -v "$(pwd)/dns_resolver_data:/data" \
-  mikhailpyrochkin/dns-resolver:1.0.1
+  mikhailpyrochkin/dns-resolver:1.0.2
 ```
