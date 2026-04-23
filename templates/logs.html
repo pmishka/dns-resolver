@@ -83,10 +83,10 @@
     </form>
 
     <div class="pagination">
-      <form method="get" class="logs-toolbar" style="margin-top: 0;">
+      <div class="logs-toolbar" style="margin-top: 0;">
         <div class="inline">
           <label for="per_page">Записей на странице:</label>
-          <select id="per_page" name="per_page" onchange="this.form.submit()">
+          <select id="per_page" name="per_page">
             <option value="10" {% if per_page == '10' %}selected{% endif %}>10</option>
             <option value="20" {% if per_page == '20' %}selected{% endif %}>20</option>
             <option value="50" {% if per_page == '50' %}selected{% endif %}>50</option>
@@ -95,21 +95,11 @@
           </select>
         </div>
         <div class="muted">Всего записей: {{ total_entries }}</div>
-      </form>
+      </div>
 
-      {% if has_prev %}
-        <a class="btn" href="{{ url_for('logs', page=page-1, per_page=per_page) }}">Назад</a>
-      {% else %}
-        <button class="btn" type="button" disabled>Назад</button>
-      {% endif %}
-
-      <span class="muted">Страница {{ page }} из {{ total_pages }}</span>
-
-      {% if has_next %}
-        <a class="btn" href="{{ url_for('logs', page=page+1, per_page=per_page) }}">Вперед</a>
-      {% else %}
-        <button class="btn" type="button" disabled>Вперед</button>
-      {% endif %}
+      <button id="page-prev" class="btn" type="button">Назад</button>
+      <span id="page-info" class="muted">Страница {{ page }} из {{ total_pages }}</span>
+      <button id="page-next" class="btn" type="button">Вперед</button>
     </div>
   </main>
   <div id="rollback-modal" class="modal-overlay" aria-hidden="true">
@@ -130,25 +120,135 @@
       const rollbackCurrentItem = document.getElementById("rollback-current-item");
       const rollbackProgressText = document.getElementById("rollback-progress-text");
       const rollbackProgressFill = document.getElementById("rollback-progress-fill");
+      const perPageSelect = document.getElementById("per_page");
+      const pagePrev = document.getElementById("page-prev");
+      const pageNext = document.getElementById("page-next");
+      const pageInfo = document.getElementById("page-info");
+      const logsTableBody = document.querySelector(".logs-table tbody");
       if (!selectAll || !rollbackForm) return;
 
-      const rowCheckboxes = Array.from(document.querySelectorAll(".rollback-row-checkbox"));
-      const activeCheckboxes = rowCheckboxes.filter((box) => !box.disabled);
       const rollbackButton = rollbackForm.querySelector('button[type="submit"]');
+      const preloadedRows = {{ preloaded_rows|tojson }};
+      const totalEntries = {{ total_entries }};
+      const totalPages = {{ total_pages }};
+      const preloadPages = {{ preload_pages }};
+      let currentPerPage = "{{ per_page }}";
+      let currentPage = Math.max(parseInt("{{ page }}", 10) || 1, 1);
       let pollTimer = null;
 
+      const escapeHtml = (value) => {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      };
+
+      const getAllRowCheckboxes = () => {
+        return Array.from(document.querySelectorAll(".rollback-row-checkbox"));
+      };
+
+      const getVisibleActiveCheckboxes = () => {
+        return getAllRowCheckboxes().filter((box) => !box.disabled);
+      };
+
+      const updateSelectAllState = () => {
+        const visibleActive = getVisibleActiveCheckboxes();
+        const allChecked = visibleActive.length > 0 && visibleActive.every((item) => item.checked);
+        selectAll.checked = allChecked;
+      };
+
+      const renderRows = (rows) => {
+        if (!logsTableBody) return;
+        logsTableBody.innerHTML = rows.map((row) => {
+          const isRolledBack = row.status === "rolled_back";
+          const statusClass = isRolledBack ? "status-rolled" : "status-active";
+          const statusText = isRolledBack ? "rolled_back" : "active";
+          return `
+            <tr>
+              <td>
+                <input
+                  class="rollback-row-checkbox"
+                  type="checkbox"
+                  name="entry_ids"
+                  value="${escapeHtml(row.id)}"
+                  ${isRolledBack ? "disabled" : ""}
+                />
+              </td>
+              <td>${escapeHtml(row.created_at)}</td>
+              <td>${escapeHtml(row.source_display || "-")}</td>
+              <td><span class="${statusClass}">${statusText}</span></td>
+              <td>${escapeHtml(row.dst_address || "")}</td>
+              <td>${escapeHtml(row.gateway || "")}</td>
+              <td>${escapeHtml(row.distance || "")}</td>
+              <td>${escapeHtml(row.comment || "")}</td>
+              <td>${escapeHtml(row.route_id || "-")}</td>
+            </tr>
+          `;
+        }).join("");
+        updateSelectAllState();
+      };
+
       selectAll.addEventListener("change", () => {
-        activeCheckboxes.forEach((box) => {
+        getVisibleActiveCheckboxes().forEach((box) => {
           box.checked = selectAll.checked;
         });
       });
 
-      rowCheckboxes.forEach((box) => {
-        box.addEventListener("change", () => {
-          const allChecked = activeCheckboxes.length > 0 && activeCheckboxes.every((item) => item.checked);
-          selectAll.checked = allChecked;
-        });
+      document.addEventListener("change", (event) => {
+        const target = event.target;
+        if (target && target.classList && target.classList.contains("rollback-row-checkbox")) {
+          updateSelectAllState();
+        }
       });
+
+      if (perPageSelect) {
+        perPageSelect.addEventListener("change", () => {
+          const nextPerPage = perPageSelect.value;
+          window.location.href = `/logs?page=1&per_page=${encodeURIComponent(nextPerPage)}`;
+        });
+      }
+
+      if (pagePrev) {
+        pagePrev.addEventListener("click", () => {
+          if (currentPage <= 1 || currentPerPage === "all") return;
+          stopPolling();
+          const targetPage = currentPage - 1;
+          if (targetPage <= preloadPages) {
+            const perPage = Math.max(parseInt(currentPerPage, 10) || 10, 1);
+            const start = (targetPage - 1) * perPage;
+            const end = start + perPage;
+            renderRows(preloadedRows.slice(start, end));
+            currentPage = targetPage;
+            if (pagePrev) pagePrev.disabled = currentPage <= 1;
+            if (pageNext) pageNext.disabled = currentPage >= totalPages;
+            if (pageInfo) pageInfo.textContent = `Страница ${currentPage} из ${totalPages}`;
+            return;
+          }
+          window.location.href = `/logs?page=${targetPage}&per_page=${encodeURIComponent(currentPerPage)}`;
+        });
+      }
+
+      if (pageNext) {
+        pageNext.addEventListener("click", () => {
+          if (currentPerPage === "all" || currentPage >= totalPages) return;
+          stopPolling();
+          const targetPage = currentPage + 1;
+          if (targetPage <= preloadPages) {
+            const perPage = Math.max(parseInt(currentPerPage, 10) || 10, 1);
+            const start = (targetPage - 1) * perPage;
+            const end = start + perPage;
+            renderRows(preloadedRows.slice(start, end));
+            currentPage = targetPage;
+            if (pagePrev) pagePrev.disabled = currentPage <= 1;
+            if (pageNext) pageNext.disabled = currentPage >= totalPages;
+            if (pageInfo) pageInfo.textContent = `Страница ${currentPage} из ${totalPages}`;
+            return;
+          }
+          window.location.href = `/logs?page=${targetPage}&per_page=${encodeURIComponent(currentPerPage)}`;
+        });
+      }
 
       const openModal = () => {
         rollbackModal.classList.add("show");
@@ -201,7 +301,7 @@
         event.preventDefault();
         stopPolling();
 
-        const selectedCount = activeCheckboxes.filter((box) => box.checked).length;
+        const selectedCount = getAllRowCheckboxes().filter((box) => !box.disabled && box.checked).length;
         if (selectedCount === 0) {
           alert("Выберите хотя бы одну запись для отката.");
           return;
@@ -248,9 +348,22 @@
         resetUiState();
       });
 
+      window.addEventListener("pagehide", () => {
+        stopPolling();
+      });
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) stopPolling();
+      });
+
       window.addEventListener("beforeunload", () => {
         stopPolling();
       });
+
+      if (pagePrev) pagePrev.disabled = currentPage <= 1 || currentPerPage === "all";
+      if (pageNext) pageNext.disabled = currentPage >= totalPages || currentPerPage === "all";
+      if (pageInfo) pageInfo.textContent = `Страница ${currentPage} из ${totalPages}`;
+      updateSelectAllState();
     })();
   </script>
 </body>

@@ -15,7 +15,7 @@ import dns.message
 import dns.query
 import dns.rdatatype
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, jsonify, make_response, redirect, render_template, request, session, url_for
 from routeros_api import RouterOsApiPool
 
 
@@ -67,6 +67,10 @@ AUDIT_DB_READY = False
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def audit_status_weight(status: str) -> int:
+    return 0 if str(status).strip() == "active" else 1
 
 
 def parse_gateways(
@@ -580,17 +584,33 @@ def init_audit_db() -> None:
         ensure_parent_dir(AUDIT_DB_PATH)
         conn = sqlite3.connect(str(AUDIT_DB_PATH))
         try:
+            conn.execute("PRAGMA busy_timeout = 1500")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS audit_entries (
                     id TEXT PRIMARY KEY,
                     created_at TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    status_weight INTEGER NOT NULL DEFAULT 1,
                     payload_json TEXT NOT NULL
                 )
                 """
             )
+
+            table_info = conn.execute("PRAGMA table_info(audit_entries)").fetchall()
+            columns = {str(row[1]) for row in table_info}
+            if "status_weight" not in columns:
+                conn.execute("ALTER TABLE audit_entries ADD COLUMN status_weight INTEGER NOT NULL DEFAULT 1")
+
+            conn.execute(
+                "UPDATE audit_entries SET status_weight = CASE WHEN status = 'active' THEN 0 ELSE 1 END "
+                "WHERE status_weight IS NULL OR status_weight NOT IN (0, 1)"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_entries(created_at DESC)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_status_weight_created_at "
+                "ON audit_entries(status_weight ASC, created_at DESC)"
+            )
             conn.commit()
             AUDIT_DB_READY = True
         finally:
@@ -599,8 +619,9 @@ def init_audit_db() -> None:
 
 def get_audit_db_connection() -> sqlite3.Connection:
     init_audit_db()
-    conn = sqlite3.connect(str(AUDIT_DB_PATH))
+    conn = sqlite3.connect(str(AUDIT_DB_PATH), timeout=1.5)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 1500")
     return conn
 
 
@@ -614,9 +635,7 @@ def read_audit_entries(limit: int = AUDIT_LOG_MAX_ENTRIES, offset: int = 0) -> l
                 """
                 SELECT payload_json
                 FROM audit_entries
-                ORDER BY
-                    CASE WHEN status = 'active' THEN 0 ELSE 1 END,
-                    created_at DESC
+                ORDER BY status_weight ASC, created_at DESC
                 """,
             ).fetchall()
         else:
@@ -624,9 +643,7 @@ def read_audit_entries(limit: int = AUDIT_LOG_MAX_ENTRIES, offset: int = 0) -> l
                 """
                 SELECT payload_json
                 FROM audit_entries
-                ORDER BY
-                    CASE WHEN status = 'active' THEN 0 ELSE 1 END,
-                    created_at DESC
+                ORDER BY status_weight ASC, created_at DESC
                 LIMIT ? OFFSET ?
                 """,
                 (max(1, safe_limit), safe_offset),
@@ -654,6 +671,44 @@ def count_audit_entries() -> int:
     return int(row["cnt"])
 
 
+def read_audit_entries_page(limit: int = AUDIT_LOG_MAX_ENTRIES, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+    conn = get_audit_db_connection()
+    try:
+        row = conn.execute("SELECT COUNT(1) AS cnt FROM audit_entries").fetchone()
+        total_entries = int(row["cnt"]) if row else 0
+
+        safe_offset = max(0, int(offset))
+        safe_limit = int(limit)
+        if safe_limit <= 0:
+            rows = conn.execute(
+                """
+                SELECT payload_json
+                FROM audit_entries
+                ORDER BY status_weight ASC, created_at DESC
+                """
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT payload_json
+                FROM audit_entries
+                ORDER BY status_weight ASC, created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (max(1, safe_limit), safe_offset),
+            ).fetchall()
+    finally:
+        conn.close()
+
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            entries.append(json.loads(row["payload_json"]))
+        except Exception:
+            continue
+    return entries, total_entries
+
+
 def clear_audit_entries() -> None:
     conn = get_audit_db_connection()
     try:
@@ -673,20 +728,22 @@ def append_audit_entry(entry: dict[str, Any]) -> None:
     entry["created_at"] = created_at
     status = str(entry.get("status", "")).strip() or "active"
     entry["status"] = status
+    status_weight = audit_status_weight(status)
     payload_json = json.dumps(entry, ensure_ascii=False)
 
     conn = get_audit_db_connection()
     try:
         conn.execute(
             """
-            INSERT INTO audit_entries (id, created_at, status, payload_json)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO audit_entries (id, created_at, status, status_weight, payload_json)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 created_at=excluded.created_at,
                 status=excluded.status,
+                status_weight=excluded.status_weight,
                 payload_json=excluded.payload_json
             """,
-            (entry_id, created_at, status, payload_json),
+            (entry_id, created_at, status, status_weight, payload_json),
         )
         conn.commit()
     finally:
@@ -784,11 +841,12 @@ def update_audit_entry(entry_id: str, updates: dict[str, Any]) -> bool:
         entry.update(updates)
         created_at = str(entry.get("created_at", "")).strip() or utc_now_iso()
         status = str(entry.get("status", "")).strip() or "active"
+        status_weight = audit_status_weight(status)
         payload_json = json.dumps(entry, ensure_ascii=False)
 
         conn.execute(
-            "UPDATE audit_entries SET created_at = ?, status = ?, payload_json = ? WHERE id = ?",
-            (created_at, status, payload_json, entry_id),
+            "UPDATE audit_entries SET created_at = ?, status = ?, status_weight = ?, payload_json = ? WHERE id = ?",
+            (created_at, status, status_weight, payload_json, entry_id),
         )
         conn.commit()
         return True
@@ -1055,31 +1113,83 @@ def logs():
         page = 1
     page = max(1, page)
 
-    total_entries = count_audit_entries()
     if per_page_raw == "all":
-        per_page = 0
+        audit_entries = read_audit_entries(limit=0, offset=0)
+        total_entries = len(audit_entries)
         total_pages = 1
         page = 1
-        offset = 0
+        preload_pages = 1
+        preloaded_rows = [
+            {
+                "id": str(entry.get("id", "")),
+                "created_at": str(entry.get("created_at", "")),
+                "source_display": str(
+                    (entry.get("source") or {}).get("source_display")
+                    or (entry.get("source") or {}).get("source_ip")
+                    or (entry.get("source") or {}).get("remote_addr")
+                    or "-"
+                ),
+                "status": "rolled_back" if str(entry.get("status", "")).strip() == "rolled_back" else "active",
+                "dst_address": str((entry.get("route") or {}).get("dst_address", "")),
+                "gateway": str((entry.get("route") or {}).get("gateway", "")),
+                "distance": str((entry.get("route") or {}).get("distance", "")),
+                "comment": str((entry.get("route") or {}).get("comment", "")),
+                "route_id": str((entry.get("route") or {}).get("route_id") or "-"),
+            }
+            for entry in audit_entries
+        ]
     else:
         per_page = int(per_page_raw)
+        _, total_entries = read_audit_entries_page(limit=1, offset=0)
         total_pages = max(1, (total_entries + per_page - 1) // per_page)
         if page > total_pages:
             page = total_pages
         offset = (page - 1) * per_page
+        audit_entries, _ = read_audit_entries_page(limit=per_page, offset=offset)
 
-    return render_template(
-        "logs.html",
-        audit_entries=read_audit_entries(limit=per_page, offset=offset),
-        total_entries=total_entries,
-        per_page=per_page_raw,
-        page=page,
-        total_pages=total_pages,
-        has_prev=page > 1,
-        has_next=page < total_pages,
-        message=request.args.get("message"),
-        error=request.args.get("error"),
+        preload_pages = min(10, total_pages)
+        preload_limit = per_page * preload_pages
+        preloaded_entries = read_audit_entries(limit=preload_limit, offset=0)
+        preloaded_rows = [
+            {
+                "id": str(entry.get("id", "")),
+                "created_at": str(entry.get("created_at", "")),
+                "source_display": str(
+                    (entry.get("source") or {}).get("source_display")
+                    or (entry.get("source") or {}).get("source_ip")
+                    or (entry.get("source") or {}).get("remote_addr")
+                    or "-"
+                ),
+                "status": "rolled_back" if str(entry.get("status", "")).strip() == "rolled_back" else "active",
+                "dst_address": str((entry.get("route") or {}).get("dst_address", "")),
+                "gateway": str((entry.get("route") or {}).get("gateway", "")),
+                "distance": str((entry.get("route") or {}).get("distance", "")),
+                "comment": str((entry.get("route") or {}).get("comment", "")),
+                "route_id": str((entry.get("route") or {}).get("route_id") or "-"),
+            }
+            for entry in preloaded_entries
+        ]
+
+    response = make_response(
+        render_template(
+            "logs.html",
+            audit_entries=audit_entries,
+            total_entries=total_entries,
+            per_page=per_page_raw,
+            page=page,
+            total_pages=total_pages,
+            has_prev=page > 1,
+            has_next=page < total_pages,
+            preload_pages=preload_pages,
+            preloaded_rows=preloaded_rows,
+            message=request.args.get("message"),
+            error=request.args.get("error"),
+        )
     )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/logs-clear", methods=["POST"])
