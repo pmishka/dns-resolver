@@ -99,8 +99,8 @@
         </table>
 
         <form id="add-routes-form" method="post" action="/add-routes" class="actions">
-          <input type="hidden" name="gateway" value="{{ gateway }}" />
-          <input type="hidden" name="dns_provider" value="{{ dns_provider }}" />
+          <input id="add-routes-gateway" type="hidden" name="gateway" value="{{ gateway }}" />
+          <input id="add-routes-dns-provider" type="hidden" name="dns_provider" value="{{ dns_provider }}" />
           <input id="add-routes-distance" type="hidden" name="distance" value="{{ distance }}" />
           <input id="add-routes-comment-prefix" type="hidden" name="comment_prefix" value="{{ comment_prefix }}" />
           <input type="hidden" name="domains" value="{{ domains_text }}" />
@@ -206,7 +206,10 @@
       const commentPrefixInput = document.getElementById("comment_prefix");
       const addRoutesCommentPrefixInput = document.getElementById("add-routes-comment-prefix");
       const gatewayInput = document.getElementById("gateway");
+      const dnsProviderInput = document.getElementById("dns_provider");
       const distanceInput = document.getElementById("distance");
+      const addRoutesGatewayInput = document.getElementById("add-routes-gateway");
+      const addRoutesDnsProviderInput = document.getElementById("add-routes-dns-provider");
       const addRoutesDistanceInput = document.getElementById("add-routes-distance");
 
       let pollTimer = null;
@@ -280,6 +283,21 @@
         distanceInput.value = nextDistance;
         if (addRoutesDistanceInput) {
           addRoutesDistanceInput.value = nextDistance;
+        }
+      };
+
+      const syncAddRoutesHiddenFields = () => {
+        if (addRoutesGatewayInput && gatewayInput) {
+          addRoutesGatewayInput.value = gatewayInput.value;
+        }
+        if (addRoutesDnsProviderInput && dnsProviderInput) {
+          addRoutesDnsProviderInput.value = dnsProviderInput.value;
+        }
+        if (addRoutesDistanceInput && distanceInput) {
+          addRoutesDistanceInput.value = distanceInput.value;
+        }
+        if (addRoutesCommentPrefixInput && commentPrefixInput) {
+          addRoutesCommentPrefixInput.value = commentPrefixInput.value.trim();
         }
       };
 
@@ -369,6 +387,7 @@
           event.preventDefault();
           stopAddPolling();
           setClientError("");
+          syncAddRoutesHiddenFields();
           if (!confirm("Добавить выбранные маршруты в MikroTik?")) {
             return;
           }
@@ -413,7 +432,13 @@
         commentPrefixInput.addEventListener("input", applyCommentPrefixToResolvedTable);
       }
       if (gatewayInput) {
-        gatewayInput.addEventListener("change", applyGatewayDefaultDistance);
+        gatewayInput.addEventListener("change", () => {
+          applyGatewayDefaultDistance();
+          syncAddRoutesHiddenFields();
+        });
+      }
+      if (dnsProviderInput) {
+        dnsProviderInput.addEventListener("change", syncAddRoutesHiddenFields);
       }
       if (distanceInput && addRoutesDistanceInput) {
         distanceInput.addEventListener("input", () => {
@@ -421,6 +446,7 @@
         });
       }
       applyCommentPrefixToResolvedTable();
+      syncAddRoutesHiddenFields();
     })();
   </script>
 </body>
